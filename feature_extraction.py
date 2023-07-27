@@ -16,6 +16,8 @@ text_file = open("output/img_list.txt", "wt")
 
 all_feats = []
 all_points = []
+all_colors = []
+img_size = []
 
 for i in tqdm(range(len(images))):
     if images[i].split('.')[-1] in ['JPG', 'jpg', 'PNG', 'png', 'RAW', 'raw', 'TIF', 'tif']:
@@ -28,15 +30,23 @@ for i in tqdm(range(len(images))):
         feats = extractor.extract(img_tensor.to(device))
         feats_ = feats['descriptors'].cpu().detach().numpy()
         points = feats['keypoints'].cpu().detach().numpy()
+        size = feats['image_size'].cpu().detach().numpy()
+        colors = [img[int(point[1]), int(point[0]), :] for point in points[0]]
+        img_size.append(size[0])
         all_points.append(points[0])
         all_feats.append(feats_[0])
+        all_colors.append(colors)
 
 all_descriptors = np.stack(all_feats)
 all_points = np.stack(all_points)
+img_size = np.stack(img_size)
+all_colors = np.stack(all_colors)
 
 text_file.close()
 np.save('output/all_descriptors.npy', all_descriptors)
 np.save('output/all_points.npy', all_points)
+np.save('output/all_colors.npy', all_colors)
+np.save('output/img_size.npy', img_size)
 
 
 

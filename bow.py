@@ -1,10 +1,34 @@
+from scipy.cluster.vq import kmeans, vq
 import joblib
-from scipy.cluster.vq import vq
 import numpy as np
 from numpy.linalg import norm
+import os
+
+k = 200
+iters = 1
 
 all_descriptors = np.load("output/all_descriptors.npy")
+
+print(all_descriptors.shape)
+
+if not os.path.exists("output/bow_codebook.plk"):
+    all_descriptors_ = all_descriptors[0]
+
+    for i, descriptors in enumerate(all_descriptors):
+        if i != 0:
+            all_descriptors_ = np.vstack((descriptors, all_descriptors_))
+
+    print(all_descriptors_.shape)
+    print("Build Codebook")
+
+    codebook, variance = kmeans(all_descriptors_, k, iters)
+
+    joblib.dump((k, codebook), "output/bow_codebook.plk", compress=3)
+    
 k, codebook = joblib.load("output/bow_codebook.plk")
+
+print("Build Pairs")
+
 visual_words = []
 
 for desciptors in all_descriptors:
@@ -31,26 +55,30 @@ idf = np.log(N/ df)
 tfidf = frequency_vectors * idf
 
 all_idx = []
+all_score = []
+top_k = 4
 for i in range(N):
     a = tfidf[i]
     b = tfidf
     cosine_similarity = np.dot(a, b.T)/(norm(a) * norm(b, axis=1))
-    top_k = 3
     idx = np.argsort(-cosine_similarity)[1:top_k]
+    score = np.sort(-cosine_similarity)[1:top_k]
     all_idx.append(idx)
+    all_score.append(score)
 
 connection = [None]*N
 
 for i in range(N):
-    for id in all_idx[i]:
+    for j, id in enumerate(all_idx[i]):
         if not connection[i]:
             connection[i] = []
         if not connection[id]:
             connection[id] = []
-        if not id in connection[i]:
-            connection[i].append(id)
-        if not i in connection[id]:
-            connection[id].append(i)
+        if -all_score[i][j] > 0.8:
+            if not id in connection[i]:
+                connection[i].append(id)
+            if not i in connection[id]:
+                connection[id].append(i)
 
 start = 0
 queue = [(start, start)]
