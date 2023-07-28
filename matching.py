@@ -39,9 +39,9 @@ for index, (i, j) in enumerate(tqdm(img_pairs)):
     point3d_indexes = []
     for p1, p2 in zip(idx0, idx1):
         if not all_points3d[i]:
-            all_points3d[i] = [-1]*all_points.shape[1]
+            all_points3d[i] = [-1]*all_points[i].shape[0]
         if not all_points3d[j]:
-            all_points3d[j] = [-1]*all_points.shape[1]
+            all_points3d[j] = [-1]*all_points[j].shape[0]
         if all_points3d[i][p1] == -1 and all_points3d[j][p2] == -1:
             all_points3d[i][p1] = point3d_index
             all_points3d[j][p2] = point3d_index
