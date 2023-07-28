@@ -12,14 +12,15 @@ with open("output/img_list.txt") as f:
     img_list = f.readlines()
 img_list = [l.strip() for l in img_list]
 
-img_pairs = np.load("output/img_pairs.npy")
-all_points = np.load("output/all_points.npy")
-all_colors = np.load("output/all_colors.npy")
+img_pairs = np.load("output/img_pairs.npy", allow_pickle=True)
+all_points = np.load("output/all_points.npy", allow_pickle=True)
+all_colors = np.load("output/all_colors.npy", allow_pickle=True)
 all_matches = np.load("output/all_matches.npy", allow_pickle=True)
-img_size = np.load("output/img_size.npy")
+img_size = np.load("output/img_size.npy", allow_pickle=True)
 all_point3ds = [[None]*(np.max(np.hstack(all_matches[:,2])) + 1),[None]*(np.max(np.hstack(all_matches[:,2])) + 1)]
 cameras = [np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]) for _ in range(len(img_list))]
-focal_length = [2378.98]*len(img_list)
+# focal_length = [2378.98]*len(img_list)
+focal_length = [2461.017]*len(img_list)
 
 def triangulate(i, j, pts0, pts1, idx0, idx1, idx3d, K):
     points_3d = cv2.triangulatePoints(np.matmul(K, cameras[i]), np.matmul(K, cameras[j]), pts0.T, pts1.T)
@@ -31,7 +32,7 @@ def triangulate(i, j, pts0, pts1, idx0, idx1, idx3d, K):
         all_point3ds[0][f] = points_3d[w]
         all_point3ds[1][f] = all_colors[i][idx0[w]]
 
-    x = np.hstack((cv2.Rodrigues(cameras[j][:3, :3])[0].ravel(), cameras[j][:3, 3].ravel(), np.stack(np.array(all_point3ds[0])[idx3d]).ravel()))
+    x = np.hstack((cv2.Rodrigues(cameras[j][:3, :3])[0].ravel(), cameras[j][:3, 3].ravel(), np.stack(np.array(all_point3ds[0], dtype=object)[idx3d]).ravel()))
     A = ba_sparse(idx3d, x)
     res = least_squares(calculate_reprojection_error, x, jac_sparsity=A, x_scale='jac', ftol=1e-8, args=(K, pts1))
     R, t, point_3D = cv2.Rodrigues(res.x[:3])[0], res.x[3:6], res.x[6:].reshape(len(idx3d), 3)
@@ -82,11 +83,13 @@ def calculate_reprojection_error(x, K, point_2D):
 
 for index, (i, j) in enumerate(tqdm(img_pairs)):
     idx0, idx1, idx3d = all_matches[index][0], all_matches[index][1], all_matches[index][2] 
-    pts0, pts1, point3ds = all_points[i, idx0, :], all_points[j, idx1, :], np.array(all_point3ds[0], dtype=object)[idx3d]
+    pts0, pts1, point3ds = all_points[i, idx0, :].astype('float64'), all_points[j, idx1, :].astype('float64'), np.array(all_point3ds[0], dtype=object)[idx3d]
     K =  np.array([[focal_length[j], 0, img_size[i, 0]/2], [0, focal_length[j], img_size[i, 1]/2], [0, 0, 1]])
 
+    # print(pts0, pts1)
+
     E, mask = cv2.findEssentialMat(pts0, pts1, K, method=cv2.RANSAC, prob=0.999, threshold=1)
-    print(E, mask, pts0, pts1, K, i, j, img_list[i], img_list[j])
+    # print(E, mask, pts0, pts1, K, i, j, img_list[i], img_list[j])
     idx0, idx1, idx3d = idx0[mask.ravel() == 1], idx1[mask.ravel() == 1], idx3d[mask.ravel() == 1]
     pts0, pts1, point3ds = pts0[mask.ravel() == 1], pts1[mask.ravel() == 1], point3ds[mask.ravel() == 1]
 
@@ -103,6 +106,6 @@ for index, (i, j) in enumerate(tqdm(img_pairs)):
     triangulate(i, j, pts0[mask_ == 1], pts1[mask_ == 1], idx0[mask_ == 1], idx1[mask_ == 1], idx3d[mask_ == 1], K)
 
 mask = np.array([pt is None for pt in all_point3ds[0]])
-    
-to_ply("output/result.ply", np.stack(np.array(all_point3ds[0], dtype=object)[mask == 0]), np.stack(np.array(all_point3ds[1], dtype=object)[mask == 0]))
+
+to_ply("output/result.ply", np.stack(np.array(all_point3ds[0], dtype=object)[mask == 0]).astype(float), np.stack(np.array(all_point3ds[1], dtype=object)[mask == 0]).astype(float))
 to_ply("output/campos.ply", np.array([(cam[:3,:3].T.dot(np.array([[0,0,0]]).T) - cam[:3,3][:,np.newaxis])[:,0] for cam in cameras]), np.array([ np.array([1, 1, 1]) for cam in cameras])*255)

@@ -7,16 +7,16 @@ import os
 k = 200
 iters = 1
 
-all_descriptors = np.load("output/all_descriptors.npy")
+all_descriptors = np.load("output/all_descriptors.npy", allow_pickle=True)
 
 print(all_descriptors.shape)
 
 if not os.path.exists("output/bow_codebook.plk"):
-    all_descriptors_ = all_descriptors[0]
+    all_descriptors_ = all_descriptors[0].astype("float")
 
     for i, descriptors in enumerate(all_descriptors):
         if i != 0:
-            all_descriptors_ = np.vstack((descriptors, all_descriptors_))
+            all_descriptors_ = np.vstack((descriptors.astype("float"), all_descriptors_))
 
     print(all_descriptors_.shape)
     print("Build Codebook")
@@ -32,7 +32,7 @@ print("Build Pairs")
 visual_words = []
 
 for desciptors in all_descriptors:
-    img_visual_words, distance = vq(desciptors, codebook)
+    img_visual_words, distance = vq(desciptors.astype("float"), codebook)
     visual_words.append(img_visual_words)
 
 frequency_vectors = []

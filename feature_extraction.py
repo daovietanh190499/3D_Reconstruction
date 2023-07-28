@@ -9,7 +9,7 @@ torch.set_grad_enabled(False)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 extractor = DISK(max_num_keypoints=2048).eval().to(device)  # load the extractor
 
-img_dir = './statlib/'
+img_dir = './fountain/'
 images = sorted( filter( lambda x: os.path.isfile(os.path.join(img_dir, x)), os.listdir(img_dir) ) )
 
 text_file = open("output/img_list.txt", "wt")

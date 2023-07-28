@@ -5,9 +5,9 @@ from lightglue import LightGlue
 from lightglue.utils import rbd
 
 img_pairs = np.load("output/img_pairs.npy")
-all_descriptors = np.load("output/all_descriptors.npy")
-all_points = np.load("output/all_points.npy")
-img_size = np.load("output/img_size.npy")
+all_descriptors = np.load("output/all_descriptors.npy", allow_pickle=True)
+all_points = np.load("output/all_points.npy", allow_pickle=True)
+img_size = np.load("output/img_size.npy", allow_pickle=True)
 
 torch.set_grad_enabled(False)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -20,8 +20,16 @@ all_matches = []
 all_points3d = [None]*all_points.shape[0]
 
 for index, (i, j) in enumerate(tqdm(img_pairs)):
-    feats0 = {"keypoints": torch.tensor(np.array([all_points[i]])).to(device), "descriptors": torch.tensor(np.array([all_descriptors[i]])).to(device), 'image_size': torch.tensor(np.array([img_size[i]])).to(device)}
-    feats1 = {"keypoints": torch.tensor(np.array([all_points[j]])).to(device), "descriptors": torch.tensor(np.array([all_descriptors[j]])).to(device), 'image_size': torch.tensor(np.array([img_size[j]])).to(device)}
+    feats0 = {
+        "keypoints": torch.tensor(np.array([all_points[i]], dtype=float), dtype=torch.float).to(device), 
+        "descriptors": torch.tensor(np.array([all_descriptors[i]], dtype=float), dtype=torch.float).to(device), 
+        'image_size': torch.tensor(np.array([img_size[i]], dtype=float), dtype=torch.float).to(device)
+    }
+    feats1 = {
+        "keypoints": torch.tensor(np.array([all_points[j]], dtype=float), dtype=torch.float).to(device), 
+        "descriptors": torch.tensor(np.array([all_descriptors[j]], dtype=float), dtype=torch.float).to(device), 
+        'image_size': torch.tensor(np.array([img_size[j]], dtype=float), dtype=torch.float).to(device)
+    }
     matches01 = matcher({'image0': feats0, 'image1': feats1})
     feats0, feats1, matches01 = [rbd(x) for x in [feats0, feats1, matches01]]  # remove batch dimension
     kpts0, kpts1, matches = feats0['keypoints'], feats1['keypoints'], matches01['matches']
