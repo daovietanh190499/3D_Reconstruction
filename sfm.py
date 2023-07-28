@@ -86,20 +86,21 @@ for index, (i, j) in enumerate(tqdm(img_pairs)):
     K =  np.array([[focal_length[j], 0, img_size[i, 0]/2], [0, focal_length[j], img_size[i, 1]/2], [0, 0, 1]])
 
     E, mask = cv2.findEssentialMat(pts0, pts1, K, method=cv2.RANSAC, prob=0.999, threshold=1)
+    print(E, mask, pts0, pts1, K, i, j, img_list[i], img_list[j])
     idx0, idx1, idx3d = idx0[mask.ravel() == 1], idx1[mask.ravel() == 1], idx3d[mask.ravel() == 1]
     pts0, pts1, point3ds = pts0[mask.ravel() == 1], pts1[mask.ravel() == 1], point3ds[mask.ravel() == 1]
 
-    mask = np.array([pt is None for pt in point3ds])
+    mask_ = np.array([pt is None for pt in point3ds])
 
     if index != 0:
-        ret, rvecs, t, inliers = cv2.solvePnPRansac(np.stack(point3ds[mask == 0]), pts1[mask == 0], K, np.zeros((5, 1), dtype=np.float32), cv2.SOLVEPNP_ITERATIVE)
+        ret, rvecs, t, inliers = cv2.solvePnPRansac(np.stack(point3ds[mask_ == 0]), pts1[mask_ == 0], K, np.zeros((5, 1), dtype=np.float32), cv2.SOLVEPNP_ITERATIVE)
         R, _ = cv2.Rodrigues(rvecs)
     else:
         _, R, t, _ = cv2.recoverPose(E, pts0, pts1, K)
     
     cameras[j] = np.hstack((R, t))
 
-    triangulate(i, j, pts0[mask == 1], pts1[mask == 1], idx0[mask == 1], idx1[mask == 1], idx3d[mask == 1], K)
+    triangulate(i, j, pts0[mask_ == 1], pts1[mask_ == 1], idx0[mask_ == 1], idx1[mask_ == 1], idx3d[mask_ == 1], K)
 
 mask = np.array([pt is None for pt in all_point3ds[0]])
     

@@ -9,7 +9,7 @@ torch.set_grad_enabled(False)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 extractor = DISK(max_num_keypoints=2048).eval().to(device)  # load the extractor
 
-img_dir = './ystad_kloster/'
+img_dir = './statlib/'
 images = sorted( filter( lambda x: os.path.isfile(os.path.join(img_dir, x)), os.listdir(img_dir) ) )
 
 text_file = open("output/img_list.txt", "wt")
@@ -37,10 +37,10 @@ for i in tqdm(range(len(images))):
         all_feats.append(feats_[0])
         all_colors.append(colors)
 
-all_descriptors = np.stack(all_feats)
-all_points = np.stack(all_points)
-img_size = np.stack(img_size)
-all_colors = np.stack(all_colors)
+all_descriptors = np.array(all_feats, dtype=object)
+all_points = np.array(all_points, dtype=object)
+img_size = np.array(img_size, dtype=object)
+all_colors = np.array(all_colors, dtype=object)
 
 text_file.close()
 np.save('output/all_descriptors.npy', all_descriptors)

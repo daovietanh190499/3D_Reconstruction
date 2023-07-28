@@ -56,7 +56,7 @@ tfidf = frequency_vectors * idf
 
 all_idx = []
 all_score = []
-top_k = 4
+top_k = 3
 for i in range(N):
     a = tfidf[i]
     b = tfidf
@@ -74,7 +74,7 @@ for i in range(N):
             connection[i] = []
         if not connection[id]:
             connection[id] = []
-        if -all_score[i][j] > 0.8:
+        if -all_score[i][j] > 0.75:
             if not id in connection[i]:
                 connection[i].append(id)
             if not i in connection[id]:
