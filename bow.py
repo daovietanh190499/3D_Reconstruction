@@ -56,7 +56,7 @@ tfidf = frequency_vectors * idf
 
 all_idx = []
 all_score = []
-top_k = 3
+top_k = 4
 for i in range(N):
     a = tfidf[i]
     b = tfidf
@@ -79,6 +79,8 @@ for i in range(N):
                 connection[i].append(id)
             if not i in connection[id]:
                 connection[id].append(i)
+
+print(connection)
 
 start = 0
 queue = [(start, start)]
