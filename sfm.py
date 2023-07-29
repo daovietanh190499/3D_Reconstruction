@@ -82,7 +82,7 @@ def calculate_reprojection_error(x, K, point_2D):
 
 for index, (i, j) in enumerate(tqdm(img_pairs)):
     idx0, idx1, idx3d = all_matches[index][0], all_matches[index][1], all_matches[index][2] 
-    pts0, pts1, point3ds = all_points[i][idx0, :].astype('float64'), all_points[j][idx1, :].astype('float64'), np.array(all_point3ds[0], dtype=object)[idx3d]
+    pts0, pts1, point3ds = all_points[i][idx0].astype('float64'), all_points[j][idx1].astype('float64'), np.array(all_point3ds[0], dtype=object)[idx3d]
     K =  np.array([[focal_length[j], 0, img_size[i, 0]/2], [0, focal_length[j], img_size[i, 1]/2], [0, 0, 1]])
 
     # print(pts0, pts1)
