@@ -56,7 +56,7 @@ tfidf = frequency_vectors * idf
 
 all_idx = []
 all_score = []
-top_k = 4
+top_k = 3
 for i in range(N):
     a = tfidf[i]
     b = tfidf
@@ -82,16 +82,29 @@ for i in range(N):
 
 print(connection)
 
+max = 0
 start = 0
+for i, c in enumerate(connection):
+    if len(c) > max:
+        max = len(c)
+        start = i
+
 queue = [(start, start)]
 visited = [False]*N
-visited[0] = True
+visited[start] = True
 i = 0
 
 while True:
     for id in connection[queue[i][1]]:
         if not visited[id]:
-            queue.append((queue[i][1], id))
+            reference_id = queue[i][1]
+            for id_ in connection[id]:
+                if id_ == queue[i][1]:
+                    break
+                if visited[id_]:
+                    reference_id = id_
+                    break
+            queue.append((reference_id, id))
             visited[id] = True
     i += 1
     if i >= len(queue):
