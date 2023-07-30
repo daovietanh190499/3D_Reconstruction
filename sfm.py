@@ -106,5 +106,6 @@ for index, (i, j) in enumerate(tqdm(img_pairs)):
 
 mask = np.array([pt is None for pt in all_point3ds[0]])
 
+np.save("output/cameras_extrinsic.npy", np.array(cameras))
 to_ply("output/result.ply", np.stack(np.array(all_point3ds[0], dtype=object)[mask == 0]).astype(float), np.stack(np.array(all_point3ds[1], dtype=object)[mask == 0]).astype(float))
 to_ply("output/campos.ply", np.array([(cam[:3,:3].T.dot(np.array([[0,0,0]]).T) - cam[:3,3][:,np.newaxis])[:,0] for cam in cameras]), np.array([ np.array([1, 1, 1]) for cam in cameras])*255)
