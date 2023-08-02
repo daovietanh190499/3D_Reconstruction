@@ -32,17 +32,15 @@ def triangulate(i, j, pts0, pts1, idx0, idx1, idx3d, K):
         all_point3ds[0][f] = points_3d[w]
         all_point3ds[1][f] = all_colors[i][idx0[w]]
 
-    x = np.hstack((np.array([K[0][0]]), cv2.Rodrigues(cameras[j][:3, :3])[0].ravel(), cameras[j][:3, 3].ravel(), np.stack(np.array(all_point3ds[0], dtype=object)[idx3d]).ravel()))
+    x = np.hstack((cv2.Rodrigues(cameras[j][:3, :3])[0].ravel(), cameras[j][:3, 3].ravel(), np.stack(np.array(all_point3ds[0], dtype=object)[idx3d]).ravel()))
     A = ba_sparse(idx3d, x)
     res = least_squares(calculate_reprojection_error, x, jac_sparsity=A, x_scale='jac', ftol=1e-8, args=(K, pts1))
-    focal_length, R, t, point_3D = res.x[0], cv2.Rodrigues(res.x[1:4])[0], res.x[4:7], res.x[7:].reshape(len(idx3d), 3)
+    R, t, point_3D = cv2.Rodrigues(res.x[:3])[0], res.x[3:6], res.x[6:].reshape(len(idx3d), 3)
 
     for w, f in enumerate(idx3d): 
         all_point3ds[0][f] = point_3D[w]
 
     cameras[j] = np.hstack((R, t.reshape((3,1))))
-
-    return focal_length
 
 def to_ply(img_dir, point_cloud, colors):
     out_points = point_cloud.reshape(-1, 3) * 200
@@ -71,16 +69,14 @@ def to_ply(img_dir, point_cloud, colors):
 
 def ba_sparse(point3d_ind, x):
     A = lil_matrix((len(point3d_ind)*2, len(x)), dtype=int)
-    A[np.arange(len(point3d_ind)*2), :7] = 1
+    A[np.arange(len(point3d_ind)*2), :6] = 1
     for i in range(3):
-        A[np.arange(len(point3d_ind))*2, 7 + np.arange(len(point3d_ind))*3 + i] = 1
-        A[np.arange(len(point3d_ind))*2 + 1, 7 + np.arange(len(point3d_ind))*3 + i] = 1
+        A[np.arange(len(point3d_ind))*2, 6 + np.arange(len(point3d_ind))*3 + i] = 1
+        A[np.arange(len(point3d_ind))*2 + 1, 6 + np.arange(len(point3d_ind))*3 + i] = 1
     return A
 
 def calculate_reprojection_error(x, K, point_2D):
-    focal_length, R, t, point_3D = x[0], x[1:4], x[4:7], x[7:].reshape((len(point_2D), 3))
-    K[0,0] = focal_length
-    K[1,1] = focal_length
+    R, t, point_3D = x[:3], x[3:6], x[6:].reshape((len(point_2D), 3))
     reprojected_point, _ = cv2.projectPoints(point_3D, R, t, K, distCoeffs=None)
     reprojected_point = reprojected_point[:, 0, :]
     return (point_2D - reprojected_point).ravel()
@@ -107,7 +103,7 @@ for index, (i, j) in enumerate(tqdm(img_pairs)):
     
     cameras[j] = np.hstack((R, t))
 
-    focal_length = triangulate(i, j, pts0[mask_ == 1], pts1[mask_ == 1], idx0[mask_ == 1], idx1[mask_ == 1], idx3d[mask_ == 1], K)
+    triangulate(i, j, pts0[mask_ == 1], pts1[mask_ == 1], idx0[mask_ == 1], idx1[mask_ == 1], idx3d[mask_ == 1], K)
 
 mask = np.array([pt is None for pt in all_point3ds[0]])
 
