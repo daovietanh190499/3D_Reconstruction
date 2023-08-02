@@ -8,7 +8,6 @@ import joblib
 from scipy.cluster.vq import vq
 from numpy.linalg import norm
 
-img_pairs = np.load("output/img_pairs.npy")
 all_descriptors = np.load("output/all_descriptors.npy", allow_pickle=True)
 all_points = np.load("output/all_points.npy", allow_pickle=True)
 img_size = np.load("output/img_size.npy", allow_pickle=True)
