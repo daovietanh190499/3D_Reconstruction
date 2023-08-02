@@ -131,7 +131,7 @@ with tqdm(total=N) as pbar:
                     elif all_points3d[id][p1] != -1:
                         interlaced_points += 1
 
-                if i == start or (i != start and interlaced_points >= 8): 
+                if i == start or (i != start and interlaced_points/len(idx0) >= 0.3): 
                     point3d_indexes = []
                     for p1, p2 in zip(idx0, idx1):
                         if all_points3d[reference_id][p1] == -1 and all_points3d[id][p2] == -1:
