@@ -74,10 +74,10 @@ print(connection)
 
 max = 0
 start = 0
-# for i, c in enumerate(connection):
-#     if len(c) > max:
-#         max = len(c)
-#         start = i
+for i, c in enumerate(connection):
+    if len(c) > max:
+        max = len(c)
+        start = i
 
 point3d_index = 0
 all_matches = []
