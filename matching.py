@@ -74,10 +74,10 @@ print(connection)
 
 max = 0
 start = 0
-for i, c in enumerate(connection):
-    if len(c) > max:
-        max = len(c)
-        start = i
+# for i, c in enumerate(connection):
+#     if len(c) > max:
+#         max = len(c)
+#         start = i
 
 point3d_index = 0
 all_matches = []
@@ -131,7 +131,7 @@ with tqdm(total=N) as pbar:
                     elif all_points3d[id][p1] != -1:
                         interlaced_points += 1
 
-                if  len(idx0) >= 500 and (i == start or (i != start and interlaced_points/len(idx0) >= 0.3)): 
+                if  len(idx0) >= 500 and (queue[i][1] == start or (queue[i][1] != start and interlaced_points/len(idx0) >= 0.3)): 
                     point3d_indexes = []
                     for p1, p2 in zip(idx0, idx1):
                         if all_points3d[reference_id][p1] == -1 and all_points3d[id][p2] == -1:
