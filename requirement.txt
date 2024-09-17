@@ -1,0 +1,6 @@
+tqdm
+scipy
+torch
+opencv-python
+joblib
+numpy
