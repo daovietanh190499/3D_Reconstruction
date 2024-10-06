@@ -6,8 +6,8 @@ from numpy.linalg import norm
 import cv2
 from typing import List, Tuple, Dict
 
-all_descriptors = np.load("output/all_descriptors.npy", allow_pickle=True)
-keypoints = np.load("output/all_points.npy", allow_pickle=True)
+all_descriptors = np.load("output/descriptors.npy", allow_pickle=True)
+keypoints = np.load("output/keypoints.npy", allow_pickle=True)
 img_size = np.load("output/img_size.npy", allow_pickle=True)
 k, codebook = joblib.load("output/bow_codebook.plk")
 
@@ -169,7 +169,6 @@ print(f"Max component score: {max_component_score}")
 def reconstruct_3d_points(
     image_sequence: List[int],
     descriptors: List[np.ndarray],
-    keypoints: List[np.ndarray],
     matching_indices: List[List[int]]
 ) -> Tuple[List[np.ndarray], List[List[Tuple[int, np.ndarray]]]]:
     """
@@ -178,7 +177,6 @@ def reconstruct_3d_points(
     Args:
     image_sequence: Sequence of image indices
     descriptors: List of keypoint's descriptors
-    keypoints: List of arrays of keypoints for each image
     matching_indices: List of arrays of matching image indices for each image
     
     Returns:
@@ -192,6 +190,7 @@ def reconstruct_3d_points(
     points_2d_projections = []
     point_to_keypoint = {}  # Dictionary to map keypoints to 3D points
     keypoint_to_3d_point = {}
+    image_to_points = [[] for _ in image_sequence]
     
     # FLANN matcher
     FLANN_INDEX_KDTREE = 1
@@ -259,14 +258,18 @@ def reconstruct_3d_points(
                     point_to_keypoint[(current_image_index, point_3d_index)] = current_kp
                     point_to_keypoint[(reference_image_index, point_3d_index)] = reference_kp
     
-    return points_3d, points_2d_projections
+    for keypoint in keypoint_to_3d_point.keys():
+        image_to_points[keypoint[0]].append([keypoint[1], keypoint_to_3d_point[keypoint]])
 
-reconstructed_3d_points, corresponding_2d_keypoints = reconstruct_3d_points(image_sequence, all_descriptors, keypoints, matching_indices)
+    return points_3d, points_2d_projections, image_to_points
+
+reconstructed_3d_points, corresponding_2d_keypoints, image_to_points = reconstruct_3d_points(image_sequence, all_descriptors, matching_indices)
 
 print(f"Number of reconstructed 3D points: {len(reconstructed_3d_points)}")
 print(f"Example 3D point: {reconstructed_3d_points[0]}")
 print(f"Corresponding 2D keypoints for the first 3D point: {corresponding_2d_keypoints[0]}")
+print(f"Corresponding keypoint-point pairs for the first image: {image_to_points[0]}")
 
-# print(queue, len(queue))
-# np.save('output/img_pairs.npy', queue[1:])
-# np.save('output/all_matches.npy', np.array(all_matches, dtype=object))
+np.save('output/image_sequence.npy', np.array(image_sequence))
+np.save('output/corresponding_2d_keypoints.npy', np.array(corresponding_2d_keypoints, dtype=object))
+np.save('output/corresponding_image_points.npy', np.array(image_to_points, dtype=object))
