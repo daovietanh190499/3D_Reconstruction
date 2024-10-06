@@ -1,6 +1,6 @@
 import numpy as np
 
-point_cloud = np.load("output/point_cloud_0025.npy")
+point_cloud = np.load("output/point_cloud_0100.npy")
 colors = np.ones_like(point_cloud)*255
 
 def to_ply(img_dir, point_cloud, colors):

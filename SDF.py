@@ -48,13 +48,7 @@ def rodrigues_to_rotation_matrix(rodrigues):
     
     return R
 
-def reproject_points(points_3d, K_params, R_rodrigues, t, eps=1e-6):
-    fx, fy, cx, cy, skew = K_params
-    K = torch.tensor([
-        [fx, skew, cx],
-        [0, fy, cy],
-        [0, 0, 1]
-    ], dtype=points_3d.dtype, device=points_3d.device)
+def reproject_points(points_3d, K, R_rodrigues, t, eps=1e-6):
     
     R = rodrigues_to_rotation_matrix(R_rodrigues)
     
@@ -67,23 +61,29 @@ def reproject_points(points_3d, K_params, R_rodrigues, t, eps=1e-6):
     
     return points_2d
 
-def reprojection_loss(points_3d, points_2d_gt, K_params, R_rodrigues, t):
-    points_2d_pred = reproject_points(points_3d, K_params, R_rodrigues, t)
+def reprojection_loss(points_3d, points_2d_gt, K_params, K, R_rodrigues, t):
+    intrinsic = torch.tensor([
+        [K_params[0].item(), K_params[1].item(), K[1].item()],
+        [0, K_params[0].item(), K[0].item()],
+        [0, 0, 1]
+    ])
 
-    point_3D = points_3d.detach().cpu().numpy().astype(np.float32)
-    R_rodrigues_ = R_rodrigues.detach().cpu().numpy().astype(np.float32)
-    t = t.detach().cpu().numpy().astype(np.float32)
-    fx, fy, cx, cy, skew = K_params
-    K = np.array([
-        np.array([fx, skew, cx]),
-        np.array([0, fy, cy]),
-        np.array([0, 0, 1])
-    ], dtype=np.float32)
+    points_2d_pred = reproject_points(points_3d, intrinsic, R_rodrigues, t)
+
+    # point_3D = points_3d.detach().cpu().numpy().astype(np.float32)
+    # R_rodrigues_ = R_rodrigues.detach().cpu().numpy().astype(np.float32)
+    # t = t.detach().cpu().numpy().astype(np.float32)
+    # f, skew = K_params
+    # K = np.array([
+    #     np.array([f.item(), skew.item(), K[0][2]]),
+    #     np.array([0, f.item(), K[1][2]]),
+    #     np.array([0, 0, 1])
+    # ], dtype=np.float32)
     # R, _ = cv2.Rodrigues(R_rodrigues_)
     # print(type(R), type(t), type(K), type(point_3D), R.shape, t.shape, K.shape, point_3D.shape)
 
-    reprojected_point, _ = cv2.projectPoints(point_3D, R_rodrigues_, t.ravel(), K, distCoeffs=None)
-    reprojected_point = reprojected_point[:, 0, :]
+    # reprojected_point, _ = cv2.projectPoints(point_3D, R_rodrigues_, t.ravel(), K, distCoeffs=None)
+    # reprojected_point = reprojected_point[:, 0, :]
 
     # points_2d_pred = torch.from_numpy(reprojected_point)
 
@@ -91,30 +91,56 @@ def reprojection_loss(points_3d, points_2d_gt, K_params, R_rodrigues, t):
     loss = F.mse_loss(points_2d_pred, points_2d_gt)
     return loss
 
-def reprojection_error(cameras_params, points_3d, points_2d_gt):
-    K_params, R_rodrigues, t = cameras_params[:5], cameras_params[5:8], cameras_params[8:].reshape(3, 1)
-    K_params = torch.from_numpy(K_params).float()
+def reprojection_error(cameras_params, K, points_3d, points_2d_gt):
+    K_params, R_rodrigues, t = cameras_params[:2], cameras_params[2:5], cameras_params[5:].reshape(3, 1)
     R_rodrigues = torch.from_numpy(R_rodrigues).float()
     t = torch.from_numpy(t).float()
 
-    points_2d_pred = reproject_points(points_3d, K_params, R_rodrigues, t)
-    error = points_2d_pred - points_2d_gt
-    error = error.view(-1).detach().numpy().ravel()
-    return error
-
-def least_square(points_3d, points_2d, K_params, R_rodrigues, t, ftol=1e-5):
-    initial_params = np.concatenate([
-        K_params.detach().cpu().numpy().ravel(),
-        R_rodrigues.detach().cpu().numpy().ravel(),
-        t.detach().cpu().numpy().ravel()
+    intrinsic = torch.tensor([
+        [K_params[0].item(), K_params[1].item(), K[1].item()],
+        [0, K_params[0].item(), K[0].item()],
+        [0, 0, 1]
     ])
 
-    res = least_squares(reprojection_error, initial_params, ftol=ftol, args=(points_3d, points_2d), method="lm")
+    points_2d_pred = reproject_points(points_3d, intrinsic, R_rodrigues, t)
+    error = points_2d_pred - points_2d_gt
+    error = error.detach().numpy().ravel()
+    return error
+
+def least_square(points_3d, points_2d, K_params, K, R_rodrigues, t, ftol=1e-5):
+    points_3d_np = points_3d.detach().cpu().numpy()
+    points_2d_np = points_2d.detach().cpu().numpy()
+    intrinsic = torch.tensor([
+        [K_params[0].item(), K_params[1].item(), K[1].item()],
+        [0, K_params[0].item(), K[0].item()],
+        [0, 0, 1]
+    ]).detach().cpu().numpy()
+
+    _, R, t, inliers = cv2.solvePnPRansac(points_3d_np, points_2d_np, intrinsic, np.zeros((5, 1), dtype=np.float32), cv2.SOLVEPNP_ITERATIVE)
+
+    # if inliers is None:
+    inliers = [i for i in range(len(points_2d_np))]
+
+    initial_params = np.concatenate([
+        K_params.detach().cpu().numpy().ravel(),
+        R.ravel(),
+        t.ravel()
+    ])
+
+    # initial_params = np.concatenate([
+    #     K_params.detach().cpu().numpy().ravel(),
+    #     R_rodrigues.detach().cpu().numpy().ravel(),
+    #     t.detach().cpu().numpy().ravel()
+    # ])
+
+    res = least_squares(reprojection_error, initial_params, ftol=ftol, args=(K, points_3d[inliers], points_2d[inliers]), method="lm")
     
-    optimized_params = res.x[:5]
-    R_rodrigues = res.x[5:8]
-    t = res.x[8:]
-    return optimized_params, R_rodrigues, t
+    optimized_params = res.x[:2]
+    R_rodrigues = res.x[2:5]
+    t = res.x[5:]
+    return optimized_params, R_rodrigues, t, inliers
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Training loop
 keypoints = np.load("output/keypoints.npy", allow_pickle=True)
@@ -130,11 +156,12 @@ images_to_points = [np.array([np.array(list(keypoint)) for keypoint in image]) f
 
 image_size = np.load("output/img_size.npy", allow_pickle=True)
 
-Ks = [torch.tensor([max(image), max(image), image[1] / 2, image[0] / 2, 0], dtype=torch.float32) for image in image_size]
-Rs = [torch.randn(3, dtype=torch.float32) for _ in images_to_points]  # Randomized rotations
-ts = [torch.tensor([[0], [0], [0]], dtype=torch.float32) for _ in images_to_points]
+Ks = [torch.tensor([image[0]/2, image[1]/2], dtype=torch.float32, device=device) for image in image_size]
+Ks_params = [torch.tensor([max(image), 0], dtype=torch.float32, device=device) for image in image_size]
+Rs = [torch.randn(3, dtype=torch.float32, device=device) for _ in images_to_points]  # Randomized rotations
+ts = [torch.tensor([[0], [0], [0]], dtype=torch.float32, device=device) for _ in images_to_points]
 
-point_model = PointOptimizer(num_points, initial_points)
+point_model = PointOptimizer(num_points, initial_points).to(device)
 optimizer_params = torch.optim.Adam(point_model.parameters(), lr=0.001)  # Reduced learning rate
 
 ftol = 1e-8
@@ -144,7 +171,7 @@ for epoch in tqdm(range(1000)):
     for j in tqdm(range(len(images_to_points))):
         optimizer_params.zero_grad()
 
-        K_params, R_rodrigues, t = Ks[j], Rs[j], ts[j]
+        K_params, K, R_rodrigues, t = Ks_params[j], Ks[j], Rs[j], ts[j]
 
         points_2d_indices = images_to_points[j][:, 0].ravel()
         points_3d_indices = images_to_points[j][:, 1].ravel()
@@ -152,23 +179,28 @@ for epoch in tqdm(range(1000)):
         points_2d_gt = keypoints[j][points_2d_indices]
         points_3d = point_model.get_points()[points_3d_indices]
 
-        optimized_params = least_square(points_3d, points_2d_gt, K_params, R_rodrigues, t, ftol=ftol)
-        
-        optimized_K_params = torch.from_numpy(optimized_params[0]).float()
-        optimized_R_rodrigues = torch.from_numpy(optimized_params[1]).float()
-        optimized_t = torch.from_numpy(optimized_params[2]).float().reshape(3, 1)
+        optimized_K_params, optimized_R_rodrigues, optimized_t, inliers = \
+            least_square(points_3d, points_2d_gt, K_params, K, R_rodrigues, t, ftol=ftol)
 
-        Ks[j] = optimized_K_params
+        # print(optimized_params)
+        
+        optimized_points_3d = points_3d[inliers]
+        optimized_points_2d = points_2d_gt[inliers]
+        optimized_K_params = torch.from_numpy(optimized_K_params).float().to(device)
+        optimized_R_rodrigues = torch.from_numpy(optimized_R_rodrigues).float().to(device)
+        optimized_t = torch.from_numpy(optimized_t).float().reshape(3, 1).to(device)
+
+        Ks_params[j] = optimized_K_params
         Rs[j] = optimized_R_rodrigues
         ts[j] = optimized_t
 
-        loss = reprojection_loss(points_3d, points_2d_gt, optimized_K_params, optimized_R_rodrigues, optimized_t)
+        loss = reprojection_loss(optimized_points_3d, optimized_points_2d, optimized_K_params, K, optimized_R_rodrigues, optimized_t)
 
         loss.backward()
         optimizer_params.step()
 
-    if epoch in [10, 25, 45]:
-        ftol /= 100
+    if epoch in [10, 25, 45, 100]:
+        ftol /= 10
         optimized_points = point_model.get_points()
         np.save(f'output/point_cloud_{str(epoch).zfill(4)}.npy', optimized_points.detach().cpu().numpy())
 
