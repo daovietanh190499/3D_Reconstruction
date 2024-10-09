@@ -4,3 +4,4 @@ torch
 opencv-python
 joblib
 numpy
+kornia

@@ -7,7 +7,7 @@ import os
 k = 200
 iters = 1
 
-all_descriptors = np.load("output/descriptors.npy", allow_pickle=True)
+all_descriptors = np.load("output/all_descriptors.npy", allow_pickle=True)
 
 print(all_descriptors.shape)
 
