@@ -1,7 +1,10 @@
+import os
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from matplotlib.image import imread
+from tqdm import tqdm
 
 def compute_polynomial_coefficients(sdf_values, corners, origin, direction):
     # Unpack the sdf values
@@ -277,7 +280,7 @@ class AppearanceModel(nn.Module):
         tmp = self.block2(emb_x)
 
 
-def sample_batch(camera_extrinsics, camera_intrinsics, images, batch_size, H, W, img_index=0, sample_all=False):
+def sample_batch(camera_extrinsics, camera_intrinsics, batch_size, H, W, img_index=0, sample_all=False):
     if sample_all:  
         image_indices = (torch.zeros(W * H) + img_index).type(torch.long)
         u, v = np.meshgrid(np.linspace(0, W - 1, W, dtype=int), np.linspace(0, H - 1, H, dtype=int))
@@ -328,53 +331,17 @@ def render_rays(sdf_grid, appearance_model, rays_o, rays_d):
 
     return colors, intersections, mask
 
-def load_images(data_path):
+def load_images(data_path, i):
     img_list = []
+    image = None
     with open("output/img_list.txt") as f:
         img_list = f.readlines()
     img_list = [l.strip() for l in img_list]
-    for i, image_path in enumerate(image_paths):
-        img = np.expand_dims(imread(image_path), 0)
-        images = np.concatenate((images, img)) if images is not None else img
-    return images
+    image_path = img_list[i]
+    image = np.expand_dims(imread(os.path.join(data_path, image_path)), 0)
+    return image, len(img_list)
 
-def train(sdf_grid, appearance_model, optimizers, schedulers, training_images, camera_extrinsics, camera_intrinsics, batch_size,
-          nb_epochs):
-    H, W = training_images.shape[1:3]
-
-    training_loss = []
-    for _ in tqdm(range(nb_epochs)):
-        ids = np.arange(training_images.shape[0])
-        np.random.shuffle(ids)
-        for img_index in ids:
-            rays_o, rays_d, samples_idx = sample_batch(camera_extrinsics, camera_intrinsics, training_images,
-                                                       batch_size, H, W, img_index=img_index)
-            gt_px_values = torch.from_numpy(training_images[samples_idx]).to(camera_intrinsics.device)
-            regenerated_px_values = render_rays(sdf_grid, appearance_model, rays_o, rays_d)
-            loss = ((gt_px_values - regenerated_px_values) ** 2).sum()
-
-            for optimizer in optimizers:
-                optimizer.zero_grad()
-            loss.backward()
-            for optimizer in optimizers:
-                optimizer.step()
-            training_loss.append(loss.item())
-        for scheduler in schedulers:
-            scheduler.step()
-    return training_loss
-
-
-
-if __name__ == "__main__":
-    point_cloud = np.load("output/points_3d.npy")
-    camera_extrinsics = np.load("output/cameras_extrinsic.npy")
-    training_images = load_images("fern/images_4/*.png")
-
-    batch_size = 1024
-
-    camera_intrinsics = torch.ones(1, device=device)*2378.98305085
-    camera_extrinsics = torch.from_numpy(camera_extrinsics).to(device)
-
+def get_grid_resolution(point_cloud):
     minx, miny, minz, maxx, maxy, maxz = \
         np.min(point_cloud[:,0]), np.min(point_cloud[:,1]), np.min(point_cloud[:,2]), \
         np.max(point_cloud[:,0]), np.max(point_cloud[:,1]), np.max(point_cloud[:,2])
@@ -400,6 +367,51 @@ if __name__ == "__main__":
     grid_size[arg_sort[0]] = grid_resolution[arg_sort[0]]*size_box
     grid_size[arg_sort[2]] = grid_resolution[arg_sort[2]]*size_box
 
+    return minx, miny, minz, maxx, maxy, maxz, grid_resolution
+
+def train(sdf_grid, appearance_model, optimizers, schedulers, training_images_path, camera_extrinsics, camera_intrinsics, batch_size,
+          nb_epochs):
+
+    training_loss = []
+    for _ in tqdm(range(nb_epochs)):
+        _, num_img = load_images(training_images_path, 0)
+        ids = np.arange(num_img)
+        np.random.shuffle(ids)
+        for img_index in ids:
+            image, _ = load_images(training_images_path, img_index)
+            
+            H, W = image.shape[:2]
+
+            rays_o, rays_d, samples_idx = sample_batch(camera_extrinsics, camera_intrinsics,
+                                                       batch_size, H, W, img_index=img_index)
+            gt_px_values = torch.from_numpy(image[samples_idx[1:]]).to(camera_intrinsics.device)
+            regenerated_px_values = render_rays(sdf_grid, appearance_model, rays_o, rays_d)
+            loss = ((gt_px_values - regenerated_px_values) ** 2).sum()
+
+            for optimizer in optimizers:
+                optimizer.zero_grad()
+            loss.backward()
+            for optimizer in optimizers:
+                optimizer.step()
+            training_loss.append(loss.item())
+        for scheduler in schedulers:
+            scheduler.step()
+    return training_loss
+
+
+
+if __name__ == "__main__":
+    point_cloud = np.load("output/points_3d.npy")
+    camera_extrinsics = np.load("output/cameras_extrinsic.npy")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    nb_epochs = int(1e4)
+    batch_size = 1024
+
+    camera_intrinsics = torch.ones(1, device=device)*2378.98305085
+    camera_extrinsics = torch.from_numpy(camera_extrinsics).to(device)
+
+    minx, miny, minz, maxx, maxy, maxz, grid_resolution = get_grid_resolution(point_cloud)
+
     sdf_grid = SDFGrid(minx, miny, minz, maxx, maxy, maxz, grid_resolution[0], grid_resolution[1], grid_resolution[2])
     appearance_model = AppearanceModel()
 
@@ -411,5 +423,6 @@ if __name__ == "__main__":
     scheduler_appearance = torch.optim.lr_scheduler.MultiStepLR(
         appearance_optimizer, [10 * (i + 1) for i in range(nb_epochs // 10)], gamma=0.9954)
 
-    train(sdf_grid, appearance_model, [sdf_optimizer, appearance_optimizer], [scheduler_sdf, scheduler_appearance], training_images, camera_extrinsics, camera_intrinsics,
+    train(sdf_grid, appearance_model, [sdf_optimizer, appearance_optimizer], [scheduler_sdf, scheduler_appearance], 
+          'ystad_kloster', camera_extrinsics, camera_intrinsics,
           batch_size, nb_epochs)
