@@ -1,4 +1,5 @@
 import os
+import cv2
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,10 +11,10 @@ def compute_polynomial_coefficients(sdf_values, corners, origin, direction):
     # Unpack the sdf values
     s000, s100, s010, s110, s001, s101, s011, s111 = sdf_values
     p000, p100, p010, p110, p001, p101, p011, p111 = corners
-    px000, py000, pz000 = p000[0], p000[1], p000[2]
-    px100 = p100[0]
-    py010 = p010[1]
-    pz001 = p001[2]
+    px000, py000, pz000 = p000[0][0], p000[0][1], p000[0][2]
+    px100 = p100[0][0]
+    py010 = p010[0][1]
+    pz001 = p001[0][2]
     ox, oy, oz = origin
     dx, dy, dz = direction
 
@@ -52,7 +53,7 @@ def compute_polynomial_coefficients(sdf_values, corners, origin, direction):
     return c3, c2, c1, c0
 
 def compute_quadratic_real_roots(c2, c1, c0):
-    if c2 == 0 or c2 <= 10e-20:
+    if c2 == 0 or c2 <= 10e-5:
         if c1 == 0 or c1 <= 10e-20:
             return None
         else:
@@ -76,7 +77,7 @@ def compute_quadratic_real_roots(c2, c1, c0):
         return None
 
 def compute_real_roots(c3, c2, c1, c0):
-    if c3 == 0 or c3 <= 10e-20:
+    if c3 == 0 or c3 <= 10e-5:
         return compute_quadratic_real_roots(c2, c1, c0)
 
     # Compute a, b, and c based on the provided coefficients
@@ -92,19 +93,19 @@ def compute_real_roots(c3, c2, c1, c0):
     
     # Case 1: Three real roots when R^2 < Q^3
     if R ** 2 < Q ** 3:
-        theta = math.acos(R / math.sqrt(Q ** 3))
-        sqrt_Q = math.sqrt(Q)
+        theta = torch.acos(R / torch.sqrt(Q ** 3))
+        sqrt_Q = torch.sqrt(Q)
 
-        t1 = -2 * sqrt_Q * math.cos(theta / 3) - a / 3
-        t2 = -2 * sqrt_Q * math.cos((theta - 2 * math.pi) / 3) - a / 3
-        t3 = -2 * sqrt_Q * math.cos((theta + 2 * math.pi) / 3) - a / 3
+        t1 = -2 * sqrt_Q * torch.cos(theta / 3) - a / 3
+        t2 = -2 * sqrt_Q * torch.cos((theta - 2 * torch.pi) / 3) - a / 3
+        t3 = -2 * sqrt_Q * torch.cos((theta + 2 * torch.pi) / 3) - a / 3
 
         # Sort roots in increasing order
         roots = t1
     
     # Case 2: One real root when R^2 >= Q^3
     else:
-        A = -math.copysign(1, R) * (abs(R) + math.sqrt(R ** 2 - Q ** 3)) ** (1/3)
+        A = -torch.sign(R) * (abs(R) + torch.sqrt(R ** 2 - Q ** 3)) ** (1/3)
         B = 0 if A == 0 else Q / A
         
         t1 = A + B - a / 3
@@ -118,10 +119,10 @@ def lerp(u, a, b):
 
 def compute_normal(sdf, corners, point):
     p000, p100, p010, p110, p001, p101, p011, p111 = corners
-    px000, py000, pz000 = p000[0], p000[1], p000[2]
-    px100 = p100[0]
-    py010 = p010[1]
-    pz001 = p001[2]
+    px000, py000, pz000 = p000[0][0], p000[0][1], p000[0][2]
+    px100 = p100[0][0]
+    py010 = p010[0][1]
+    pz001 = p001[0][2]
     x, y, z = point
 
     # sdf = [s000, s100, s010, s110, s001, s101, s011, s111]
@@ -145,15 +146,16 @@ def compute_normal(sdf, corners, point):
     df_dz = lerp(y, x0, x1)
 
     # Normal vector
-    normal = (df_dx, df_dy, df_dz)
+    normal = torch.cat((df_dx, df_dy, df_dz), dim=0)
     return normal
 
 class SDFGrid(nn.Module):
-    def __init__(self, minx, miny, minz, maxx, maxy, maxz, nx, ny, nz):
+    def __init__(self, minx, miny, minz, maxx, maxy, maxz, nx, ny, nz, device):
         super(SDFGrid, self).__init__()
+        self.device = device
         # Define the grid bounds
-        self.min_bound = torch.tensor([minx, miny, minz])
-        self.max_bound = torch.tensor([maxx, maxy, maxz])
+        self.min_bound = torch.tensor([minx, miny, minz]).to(device)
+        self.max_bound = torch.tensor([maxx, maxy, maxz]).to(device)
         
         # Define the learnable SDF grid as a parameter (nx * ny * nz grid)
         self.sdf_values = nn.Parameter(torch.randn(nx, ny, nz))  # Random initialization
@@ -164,14 +166,14 @@ class SDFGrid(nn.Module):
         self.nz = nz
         
         # Voxel size (distance between grid points)
-        self.voxel_size = (self.max_bound - self.min_bound) / torch.tensor([nx - 1, ny - 1, nz - 1])
+        self.voxel_size = (self.max_bound - self.min_bound) / torch.tensor([nx - 1, ny - 1, nz - 1]).to(device)
 
     def query_voxels(self, points):
         # Batch process of voxel queries
         idx = ((points - self.min_bound) / self.voxel_size).long()
 
         # Ensure points are within bounds
-        valid_mask = torch.all((idx >= 0) & (idx < torch.tensor([self.nx, self.ny, self.nz]) - 1), dim=-1)
+        valid_mask = torch.all((idx >= 0) & (idx < torch.tensor([self.nx, self.ny, self.nz]).to(self.device) - 1), dim=-1)
 
         if not valid_mask.any():
             return None  # No valid points
@@ -179,13 +181,13 @@ class SDFGrid(nn.Module):
         # Get 8 corner indices for each point
         corners = [
             idx,
-            idx + torch.tensor([1, 0, 0]),
-            idx + torch.tensor([0, 1, 0]),
-            idx + torch.tensor([1, 1, 0]),
-            idx + torch.tensor([0, 0, 1]),
-            idx + torch.tensor([1, 0, 1]),
-            idx + torch.tensor([0, 1, 1]),
-            idx + torch.tensor([1, 1, 1]),
+            idx + torch.tensor([1, 0, 0]).to(self.device),
+            idx + torch.tensor([0, 1, 0]).to(self.device),
+            idx + torch.tensor([1, 1, 0]).to(self.device),
+            idx + torch.tensor([0, 0, 1]).to(self.device),
+            idx + torch.tensor([1, 0, 1]).to(self.device),
+            idx + torch.tensor([0, 1, 1]).to(self.device),
+            idx + torch.tensor([1, 1, 1]).to(self.device),
         ]
 
         # Get the 8 SDF values and their positions for all rays
@@ -194,25 +196,33 @@ class SDFGrid(nn.Module):
 
         return sdf_vals, positions, valid_mask
 
-    def ray_box_intersection(self, origins, directions):
+    def rays_box_intersection(self, origins, directions):
         inv_dir = 1.0 / directions
+
         t1 = (self.min_bound - origins) * inv_dir
         t2 = (self.max_bound - origins) * inv_dir
+        zeros = torch.zeros_like(t1)
 
         t_near = torch.max(torch.min(t1, t2), dim=-1)[0]
         t_far = torch.min(torch.max(t1, t2), dim=-1)[0]
-        
+
+        t_near = t_near*(t_near > 0)
+
         valid_mask = t_near <= t_far
         t_near = torch.where(valid_mask, t_near, torch.tensor(float('inf')))
         t_far = torch.where(valid_mask, t_far, torch.tensor(-float('inf')))
 
         return t_near, t_far, valid_mask
 
-    def march_rays(self, origins, directions):
+    def forward(self, origins, directions):
+        import time
+        start = time.time()
         batch_size = origins.size(0)
-        t_near, t_far, valid_mask = self.ray_box_intersection(origins, directions)
+        t_near, t_far, valid_mask = self.rays_box_intersection(origins, directions)
         
         ray_data = [None for _ in range(batch_size)]
+
+        print("generate_t_infor", time.time() - start)
 
         for i in range(batch_size):
             if not valid_mask[i]:
@@ -227,12 +237,12 @@ class SDFGrid(nn.Module):
             next_voxel_boundary = (idx + torch.maximum(step, torch.tensor(0))) * self.voxel_size + self.min_bound
             t_next = (next_voxel_boundary - origins[i]) / directions[i]
 
-            while torch.all((idx >= 0) & (idx < torch.tensor([self.nx, self.ny, self.nz]) - 1)):
+            while torch.all((idx >= 0) & (idx < torch.tensor([self.nx, self.ny, self.nz]).to(self.device) - 1)):
                 query_result = self.query_voxels(current_pos.unsqueeze(0))
                 if query_result is not None:
                     sdf_vals, positions, _ = query_result
                     coeffs = compute_polynomial_coefficients(sdf_vals, positions, origins[i], directions[i])
-                    t = compute_real_roots(**coeffs)
+                    t = compute_real_roots(*coeffs)
 
                     if t is not None:
                         intersection = origins[i] + t * directions[i]
@@ -250,34 +260,39 @@ class SDFGrid(nn.Module):
                 t_min = torch.min(t_next)
                 current_pos = origins[i] + t_min * directions[i]
                 t_next += t_delta * mask
+        
+        print("stop_t_infor", time.time() - start)
 
         return ray_data
 
+
 class AppearanceModel(nn.Module):
-    def __init__(self, embedding_dim_pos=20, embedding_dim_direction=8, hidden_dim=128):
+    def __init__(self, embedding_dim_pos=20, embedding_dim_direction=8, embedding_dim_normal=8, hidden_dim=128):
         super(AppearanceModel, self).__init__()
 
-        self.block3 = nn.Sequential(nn.Linear(embedding_dim_direction * 6 + hidden_dim + 3, hidden_dim // 2), nn.ReLU(), )
-        self.block4 = nn.Sequential(nn.Linear(hidden_dim // 2, 3), nn.Sigmoid(), )
+        self.block1 = nn.Sequential(nn.Linear(embedding_dim_direction * 6 + 3 + embedding_dim_pos * 6 + 3 + embedding_dim_normal * 6 + 3, hidden_dim),  nn.ReLU(),
+                                    nn.Linear(hidden_dim, hidden_dim // 2), nn.ReLU(),)
+        self.block2 = nn.Sequential(nn.Linear(hidden_dim // 2, 3), nn.Sigmoid(), )
 
         self.embedding_dim_pos = embedding_dim_pos
         self.embedding_dim_direction = embedding_dim_direction
-        self.relu = nn.ReLU()
+        self.embedding_dim_normal = embedding_dim_normal
 
     @staticmethod
     def positional_encoding(x, L):
-        out = torch.empty(x.shape[0], x.shape[1] * 2 * L, device=x.device)
-        for i in range(x.shape[1]):
-            for j in range(L):
-                out[:, i * (2 * L) + 2 * j] = torch.sin(2 ** j * x[:, i])
-                out[:, i * (2 * L) + 2 * j + 1] = torch.cos(2 ** j * x[:, i])
-        return out
+        out = [x]
+        for j in range(L):
+            out.append(torch.sin(2 ** j * x))
+            out.append(torch.cos(2 ** j * x))
+        return torch.cat(out, dim=1)
 
-    def forward(self, o, d):
-        emb_x = self.positional_encoding(o, self.embedding_dim_pos // 2)
+    def forward(self, o, d, n):
+        emb_x = self.positional_encoding(o, self.embedding_dim_pos)
         emb_d = self.positional_encoding(d, self.embedding_dim_direction)
-        # h = self.block1(emb_x)
-        tmp = self.block2(emb_x)
+        emb_n = self.positional_encoding(n, self.embedding_dim_normal)
+
+        c = self.block2(self.block1(torch.cat((emb_x, emb_d, emb_n), dim=1)))
+        return c
 
 
 def sample_batch(camera_extrinsics, camera_intrinsics, batch_size, H, W, img_index=0, sample_all=False):
@@ -309,37 +324,49 @@ def sample_batch(camera_extrinsics, camera_intrinsics, batch_size, H, W, img_ind
                             (-(v.to(camera_intrinsics.device) - .5 * H) / focal).unsqueeze(-1),
                             - torch.ones_like(u).unsqueeze(-1)], dim=-1)
     rays_d_world = torch.matmul(c2w[:3, :3].view(1, 3, 3), rays_d_cam.unsqueeze(2)).squeeze(2)
-    rays_o_world = c2w[:3, 3].view(1, 3).expand_as(rays_d_world)
+    rays_o_world = c2w[:3, 3].view(1, 3).expand_as(rays_d_world).to(camera_intrinsics.device)
     return rays_o_world, F.normalize(rays_d_world, p=2, dim=1), (image_indices, v.cpu(), u.cpu())
 
 def render_rays(sdf_grid, appearance_model, rays_o, rays_d):
-    ray_data = sdf_grid.march_rays(rays_o, rays_d)
+    import time
+    start = time.time()
+    
+    ray_data = sdf_grid(rays_o, rays_d)
+
+    print("generate_sdf", time.time() - start)
 
     intersections = []
-    colors = []
+    normals = []
+    directions = []
     mask = []
     for i, data in enumerate(ray_data):
         mask.append(data is not None)
         if data is not None:
             [intersection, normal] = data
-            color = appearance_model(intersection, normal, rays_d[i])
-            intersection.append(intersection)
-            colors.append(color)
+            directions.append(rays_d[i])
+            intersections.append(intersection)
+            normals.append(normal)
 
+    directions = torch.stack(directions, dim=0)
     intersections = torch.stack(intersections, dim=0)
-    colors = torch.stack(colors, dim=0)
+    normals = torch.stack(normals, dim=0)
+
+    colors = appearance_model(intersections, directions, normals)
 
     return colors, intersections, mask
 
-def load_images(data_path, i):
+def load_images(data_path):
     img_list = []
+    images = []
     image = None
-    with open("output/img_list.txt") as f:
+    with open("output/reconstructed_img.txt") as f:
         img_list = f.readlines()
     img_list = [l.strip() for l in img_list]
-    image_path = img_list[i]
-    image = np.expand_dims(imread(os.path.join(data_path, image_path)), 0)
-    return image, len(img_list)
+    for i in range(len(img_list)):
+        image_path = img_list[i]
+        image = imread(os.path.join(data_path, image_path))
+        images.append(image)
+    return images, len(img_list)
 
 def get_grid_resolution(point_cloud):
     minx, miny, minz, maxx, maxy, maxz = \
@@ -369,24 +396,36 @@ def get_grid_resolution(point_cloud):
 
     return minx, miny, minz, maxx, maxy, maxz, grid_resolution
 
-def train(sdf_grid, appearance_model, optimizers, schedulers, training_images_path, camera_extrinsics, camera_intrinsics, batch_size,
+def train(sdf_grid, appearance_model, optimizers, schedulers, num_img, camera_extrinsics, camera_intrinsics, batch_size,
           nb_epochs):
-
+    import time
     training_loss = []
-    for _ in tqdm(range(nb_epochs)):
-        _, num_img = load_images(training_images_path, 0)
+    for epoch in tqdm(range(nb_epochs)):
         ids = np.arange(num_img)
         np.random.shuffle(ids)
         for img_index in ids:
-            image, _ = load_images(training_images_path, img_index)
+            start = time.time()
+
+            image = images[img_index]
             
             H, W = image.shape[:2]
 
             rays_o, rays_d, samples_idx = sample_batch(camera_extrinsics, camera_intrinsics,
                                                        batch_size, H, W, img_index=img_index)
-            gt_px_values = torch.from_numpy(image[samples_idx[1:]]).to(camera_intrinsics.device)
-            regenerated_px_values = render_rays(sdf_grid, appearance_model, rays_o, rays_d)
-            loss = ((gt_px_values - regenerated_px_values) ** 2).sum()
+
+            print(time.time() - start)
+
+            gt_px_values = torch.from_numpy(image[samples_idx[1], samples_idx[2]]).to(camera_intrinsics.device)
+
+            print(time.time() - start)
+
+            regenerated_px_values, intersections, mask = render_rays(sdf_grid, appearance_model, rays_o, rays_d)
+
+            loss = ((gt_px_values[mask]/255 - regenerated_px_values) ** 2).sum()
+
+            print(time.time() - start)
+
+            print("backward", loss.item())
 
             for optimizer in optimizers:
                 optimizer.zero_grad()
@@ -394,26 +433,39 @@ def train(sdf_grid, appearance_model, optimizers, schedulers, training_images_pa
             for optimizer in optimizers:
                 optimizer.step()
             training_loss.append(loss.item())
+
+            print(time.time() - start)
         for scheduler in schedulers:
             scheduler.step()
+
+        if epoch % 5 == 0 and epoch != 0:
+            torch.save(sdf_grid.state_dict(), "output/sdf_grid.pth")
+            torch.save(appearance_model.state_dict(), "output/appearance_model.pth")
+
     return training_loss
 
-
+images = []
 
 if __name__ == "__main__":
+    images, num_img = load_images('ystad_kloster')
     point_cloud = np.load("output/points_3d.npy")
     camera_extrinsics = np.load("output/cameras_extrinsic.npy")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     nb_epochs = int(1e4)
     batch_size = 1024
 
+    print(device)
+
     camera_intrinsics = torch.ones(1, device=device)*2378.98305085
-    camera_extrinsics = torch.from_numpy(camera_extrinsics).to(device)
+    camera_extrinsics = torch.from_numpy(np.array([np.hstack((cv2.Rodrigues(cam[:,:3])[0].ravel(), cam[:, 3].ravel())) for cam in camera_extrinsics])).float().to(device)
 
     minx, miny, minz, maxx, maxy, maxz, grid_resolution = get_grid_resolution(point_cloud)
 
-    sdf_grid = SDFGrid(minx, miny, minz, maxx, maxy, maxz, grid_resolution[0], grid_resolution[1], grid_resolution[2])
+    sdf_grid = SDFGrid(minx, miny, minz, maxx, maxy, maxz, grid_resolution[0], grid_resolution[1], grid_resolution[2], device)
     appearance_model = AppearanceModel()
+
+    sdf_grid.to(device)
+    appearance_model.to(device)
 
     sdf_optimizer = torch.optim.Adam(sdf_grid.parameters(), lr=0.001)
     scheduler_sdf = torch.optim.lr_scheduler.MultiStepLR(
@@ -424,5 +476,5 @@ if __name__ == "__main__":
         appearance_optimizer, [10 * (i + 1) for i in range(nb_epochs // 10)], gamma=0.9954)
 
     train(sdf_grid, appearance_model, [sdf_optimizer, appearance_optimizer], [scheduler_sdf, scheduler_appearance], 
-          'ystad_kloster', camera_extrinsics, camera_intrinsics,
+          num_img, camera_extrinsics, camera_intrinsics,
           batch_size, nb_epochs)

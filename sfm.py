@@ -17,7 +17,8 @@ all_colors = np.load("output/all_colors.npy", allow_pickle=True)
 all_matches = np.load("output/all_matches.npy", allow_pickle=True)
 img_size = np.load("output/img_size.npy", allow_pickle=True)
 all_point3ds = [[None]*(np.max(np.hstack(all_matches[:,2])) + 1),[None]*(np.max(np.hstack(all_matches[:,2])) + 1)]
-cameras = [np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]) for _ in range(len(img_list))]
+# cameras = [np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]) for _ in range(len(img_list))]
+cameras = [None for _ in range(len(img_list))]
 # focal_length = [2378.98]*len(img_list)
 # focal_length = 3340.8
 focal_length = 2378.98305085
@@ -123,12 +124,25 @@ for index, (i, j) in enumerate(tqdm(img_pairs)):
     
     cameras[j] = np.hstack((R, t))
 
+    if cameras[i] is None:
+        cameras[i] = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
+
     if np.sum(mask_) > 0:
         focal_length = triangulate(i, j, pts0[mask_ == 1], pts1[mask_ == 1], idx0[mask_ == 1], idx1[mask_ == 1], idx3d[mask_ == 1], K)
 
 mask = np.array([pt is None for pt in all_point3ds[0]])
 
-np.save("output/cameras_extrinsic.npy", np.array(cameras))
+camera_mask = np.array([cam is not None for cam in cameras]).astype(np.int8)
+
+reconstructed_cameras = []
+
+with open("output/reconstructed_img.txt", "wt") as text_file:
+    for i in range(len(img_list)):
+        if camera_mask[i]:
+            text_file.write(img_list[i] + '\n')
+            reconstructed_cameras.append(cameras[i])
+
+np.save("output/cameras_extrinsic.npy", np.array(reconstructed_cameras))
 np.save("output/points_3d.npy", np.stack(np.array(all_point3ds[0], dtype=object)[mask == 0]).astype(float))
 to_ply("output/result.ply", np.stack(np.array(all_point3ds[0], dtype=object)[mask == 0]).astype(float), np.stack(np.array(all_point3ds[1], dtype=object)[mask == 0]).astype(float))
-to_ply("output/campos.ply", np.array([(cam[:3,:3].T.dot(np.array([[0,0,0]]).T) - cam[:3,3][:,np.newaxis])[:,0] for cam in cameras]), np.array([ np.array([1, 1, 1]) for cam in cameras])*255)
+# to_ply("output/campos.ply", np.array([(cam[:3,:3].T.dot(np.array([[0,0,0]]).T) - cam[:3,3][:,np.newaxis])[:,0] for cam in cameras]), np.array([ np.array([1, 1, 1]) for cam in cameras])*255)
