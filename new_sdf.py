@@ -7,6 +7,8 @@ import cv2
 import os
 from matplotlib.image import imread
 
+from tqdm import tqdm
+
 class SceneHelper:
     def __init__(self, data_path, point_cloud_path, camera_extrinsics_path):
         point_cloud = np.load(point_cloud_path)
@@ -53,13 +55,13 @@ class SceneHelper:
         resolution = 255
         grid_resolution = np.array([255, 255, 255])
 
-        size_box = grid_size[arg_sort[1]] / 255
+        size_box = grid_size[arg_sort[2]] / 255
 
         grid_resolution[arg_sort[0]] = np.ceil(grid_size[arg_sort[0]]/size_box)
-        grid_resolution[arg_sort[2]] = np.ceil(grid_size[arg_sort[2]]/size_box)
+        grid_resolution[arg_sort[1]] = np.ceil(grid_size[arg_sort[1]]/size_box)
 
         grid_size[arg_sort[0]] = grid_resolution[arg_sort[0]]*size_box
-        grid_size[arg_sort[2]] = grid_resolution[arg_sort[2]]*size_box
+        grid_size[arg_sort[1]] = grid_resolution[arg_sort[1]]*size_box
 
         return (minx, miny, minz), (maxx, maxy, maxz), grid_resolution
 
@@ -119,7 +121,7 @@ class SDFGrid(nn.Module):
         # Trilinear interpolation
         sdf_values = F.grid_sample(self.grid[:, 0:1, ...], normalized_points, 
                                    align_corners=True, mode='bilinear')
-        
+
         return sdf_values.view(points.shape[:-1])
 
     def get_sdf_sh(self, points):
@@ -251,12 +253,17 @@ class GradientBasedSampler:
         z_vals, indices = torch.sort(z_vals, dim=-1)
         pts = torch.gather(pts, 1, indices.unsqueeze(-1).expand_as(pts))
 
+        # Do not calculate grad of these variables
+        pts = pts.detach()
+        z_vals = z_vals.detach()
+        valid = valid.detach()
+
         # Compute SDF for all points
         sdf_values, sh_values = sdf_grid.get_sdf_sh(pts.reshape(-1, 3)) #.reshape(pts.shape[:-1])
         sdf_values = sdf_values.reshape(pts.shape[:-1])
         sh_values = sh_values.reshape(*pts.shape[:-1], 27)
 
-        return sdf_values, sh_values, pts, z_vals
+        return sdf_values, sh_values, pts, z_vals, valid
 
 
 class SDFToNeRF(nn.Module):
@@ -285,7 +292,11 @@ class SDFToNeRF(nn.Module):
         return 1 / (1 + torch.exp(-self.alpha * (sdf + self.beta)))
     
     def forward(self, rays_o, rays_d):
-        sdf_values, sh_values, pts, z_vals = self.sampler(self.sdf_grid, rays_o, rays_d)
+        sdf_values, sh_values, pts, z_vals, valid = self.sampler(self.sdf_grid, rays_o, rays_d)
+        
+        rays_o = rays_o[valid]
+        rays_d = rays_d[valid]
+
         rays_d = rays_d.expand(z_vals.shape[1], rays_d.shape[0], 3).transpose(0, 1)
         colors = self.eval_spherical_function(sh_values.reshape(-1, 3, 9), rays_d.reshape(-1, 3)).reshape(rays_d.shape)
         sigma = self.sdf_to_density(sdf_values.reshape(-1)).reshape(sdf_values.shape)
@@ -300,16 +311,29 @@ class SDFToNeRF(nn.Module):
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    nb_epochs = int(1e4)
-    batch_size = 1024
+    nb_epochs = int(1e3)
+    batch_size = 512
 
     scene_helper = SceneHelper('ystad_kloster', "output/points_3d.npy", "output/cameras_extrinsic.npy")
 
     sdf_model = SDFToNeRF(scene_helper.resolution, (scene_helper.min_bound, scene_helper.max_bound), device)
     sdf_model.to(device)
 
-    rays_o, rays_d, gt_px_values = scene_helper.sample_batch(batch_size, img_index=0, sample_all=False)
+    optimizer = torch.optim.Adam(sdf_model.parameters(), lr=1e-2)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[2, 4, 8], gamma=0.5)
 
-    pred_px_values = sdf_model(rays_o, rays_d)
+    training_loss = []
+    for epoch in range(nb_epochs):
+        for i in tqdm(range(scene_helper.num_img)):
+            torch.cuda.empty_cache()
 
-    print(pred_px_values)
+            rays_o, rays_d, gt_px_values = scene_helper.sample_batch(batch_size, img_index=i, sample_all=False)
+            pred_px_values = sdf_model(rays_o, rays_d)
+
+            loss = torch.nn.functional.mse_loss(gt_px_values.float(), pred_px_values.float())
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            training_loss.append(loss.item())
+        scheduler.step()

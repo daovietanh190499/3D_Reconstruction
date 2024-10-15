@@ -80,6 +80,7 @@ def render_rays(nerf_model, ray_origins, ray_directions, hn=0, hf=0.5, nb_bins=1
     ray_directions = ray_directions.expand(nb_bins, ray_directions.shape[0], 3).transpose(0, 1)
 
     colors, sigma = nerf_model(x.reshape(-1, 3), ray_directions.reshape(-1, 3))
+    print(colors)
     colors = colors.reshape(x.shape)
     sigma = sigma.reshape(x.shape[:-1])
 
@@ -98,8 +99,11 @@ def train(nerf_model, optimizer, scheduler, data_loader, device='cpu', hn=0, hf=
             ray_origins = batch[:, :3].to(device)
             ray_directions = batch[:, 3:6].to(device)
             ground_truth_px_values = batch[:, 6:].to(device)
+            print(ground_truth_px_values.shape)
 
             regenerated_px_values = render_rays(nerf_model, ray_origins, ray_directions, hn=hn, hf=hf, nb_bins=nb_bins)
+            print(regenerated_px_values.shape)
+
             loss = torch.nn.functional.mse_loss(ground_truth_px_values, regenerated_px_values)
 
             optimizer.zero_grad()
@@ -113,8 +117,8 @@ def train(nerf_model, optimizer, scheduler, data_loader, device='cpu', hn=0, hf=
 
 if __name__ == "__main__":
     device = 'cuda'
-    training_dataset = torch.from_numpy(np.load('training_data.pkl', allow_pickle=True))
-    testing_dataset = torch.from_numpy(np.load('testing_data.pkl', allow_pickle=True))
+    training_dataset = torch.from_numpy(np.load('/home/coder/psrnet/nerf_datasets/training_data.pkl', allow_pickle=True))
+    testing_dataset = torch.from_numpy(np.load('/home/coder/psrnet/nerf_datasets/testing_data.pkl', allow_pickle=True))
     model = NerfModel(N=256).to(device)
     model_optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(model_optimizer, milestones=[2, 4, 8], gamma=0.5)
