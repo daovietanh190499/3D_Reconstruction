@@ -15,8 +15,12 @@ past_cloud = filter_point_cloud(past_cloud)
 point_cloud = np.concatenate((point_cloud, past_cloud))
 
 colors = np.ones_like(point_cloud)*255
-for i in range(8):
+
+for i in range(1000):
   colors[i] = np.array([0, 0, 255])
+
+for i in range(past_cloud.shape[0]):
+  colors[-i -1] = np.array([0, 128, 0])
 
 def to_ply(img_dir, point_cloud, colors):
     out_points = point_cloud.reshape(-1, 3) * 200

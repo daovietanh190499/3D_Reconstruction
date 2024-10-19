@@ -11,7 +11,7 @@ from matplotlib.image import imread
 from tqdm import tqdm
 
 class SceneHelper:
-    def __init__(self, data_path, point_cloud_path, camera_extrinsics_path):
+    def __init__(self, data_path, point_cloud_path, camera_extrinsics_path, max_resolution):
         point_cloud = np.load(point_cloud_path)
         camera_extrinsics = np.load(camera_extrinsics_path)
 
@@ -23,19 +23,26 @@ class SceneHelper:
         self.camera_extrinsics = camera_extrinsics
         self.camera_intrinsics = camera_intrinsics
         self.images, self.num_img = self.load_images()
-        self.min_bound, self.max_bound, self.resolution = (-1, -1, -1), (1, 1, 1), (256, 256, 256)
-        self.min_bound, self.max_bound, self.resolution = self.get_grid_resolution(255)
-        self.bound = (self.min_bound, self.max_bound)
-        self.rectangular = np.array([
-            bounds[0],
-            bounds[1],
-            [bounds[0][0], bounds[0][1], bounds[1][2]],
-            [bounds[0][0], bounds[1][1], bounds[1][2]],
-            [bounds[1][0], bounds[0][1], bounds[1][2]],
-            [bounds[0][0], bounds[1][1], bounds[0][2]],
-            [bounds[1][0], bounds[1][1], bounds[0][2]],
-            [bounds[1][0], bounds[0][1], bounds[0][2]]
-        ])
+        self.min_bound, self.max_bound, self.resolution = (-2, -2, -2), (2, 2, 2), (max_resolution, max_resolution, max_resolution)
+        self.min_bound, self.max_bound, self.resolution = self.get_grid_resolution(max_resolution)
+        self.bounds = (self.min_bound, self.max_bound)
+
+        x = np.linspace(0, 1, 10)*((self.max_bound[0] - self.min_bound[0])) + self.min_bound[0]
+        y = np.linspace(0, 1, 10)*((self.max_bound[1] - self.min_bound[1])) + self.min_bound[1]
+        z = np.linspace(0, 1, 10)*((self.max_bound[2] - self.min_bound[2])) + self.min_bound[2]
+        grid = np.meshgrid(x, y, z, indexing='ij')
+        self.rectangular = np.stack(grid, axis=-1).reshape(-1, 3)
+
+        # self.rectangular = np.array([
+        #     self.bounds[0],
+        #     self.bounds[1],
+        #     [self.bounds[0][0], self.bounds[0][1], self.bounds[1][2]],
+        #     [self.bounds[0][0], self.bounds[1][1], self.bounds[1][2]],
+        #     [self.bounds[1][0], self.bounds[0][1], self.bounds[1][2]],
+        #     [self.bounds[0][0], self.bounds[1][1], self.bounds[0][2]],
+        #     [self.bounds[1][0], self.bounds[1][1], self.bounds[0][2]],
+        #     [self.bounds[1][0], self.bounds[0][1], self.bounds[0][2]]
+        # ])
     
     def filter_point_cloud(self, verts):
         verts = verts * 200
@@ -112,49 +119,6 @@ class SceneHelper:
         gt_px_values = torch.from_numpy(image[v.cpu(), u.cpu()]).to(self.camera_intrinsics.device)
 
         return rays_o_world, F.normalize(rays_d_world, p=2, dim=1), gt_px_values
-
-class SDFGrid(nn.Module):
-    def __init__(self, resolution, min_bound, max_bound, device):
-        super().__init__()
-        self.resolution = resolution
-        self.min_bound = torch.tensor(min_bound).to(device)
-        self.max_bound = torch.tensor(max_bound).to(device)
-        self.grid = nn.Parameter(torch.ones(1, 27 + 1, *resolution) / 100)
-    
-    def get_sdf(self, points):
-        # Normalize points to [-1, 1] range
-        normalized_points = (points - self.min_bound) / (self.max_bound - self.min_bound) * 2 - 1
-        
-        # Reshape for grid_sample
-        normalized_points = normalized_points.view(1, -1, 1, 1, 3)
-        
-        # Trilinear interpolation
-        sdf_values = F.grid_sample(self.grid[:, 0:1, ...], normalized_points, 
-                                   align_corners=True, mode='bilinear')
-
-        return sdf_values.view(points.shape[:-1])
-
-    def get_sdf_sh(self, points):
-        # Normalize points to [-1, 1] range
-        normalized_points = (points - self.min_bound) / (self.max_bound - self.min_bound) * 2 - 1
-        
-        # Reshape for grid_sample
-        normalized_points = normalized_points.view(1, -1, 1, 1, 3)
-        
-        # Trilinear interpolation
-        sdf_values = F.grid_sample(self.grid[:, 0:1, ...], normalized_points, 
-                                   align_corners=True, mode='bilinear')
-
-        sh_values = F.grid_sample(self.grid[:, 1:, ...], normalized_points, 
-                            align_corners=True, mode='bilinear')
-        
-        return sdf_values.view(points.shape[:-1]), sh_values.view(points.shape[0], 27)
-
-    def get_sdf_gradient(self, points):
-        points.requires_grad_(True)
-        sdf = self.get_sdf(points)
-        grad = torch.autograd.grad(sdf.sum(), points, create_graph=True)[0]
-        return grad
 
 class GradientBasedSampler:
     def __init__(self, num_samples=64, num_importance=32, perturb=True):
@@ -278,15 +242,71 @@ class GradientBasedSampler:
 
         return sdf_values, sh_values, pts, z_vals, valid
 
-
-class SDFToNeRF(nn.Module):
-    def __init__(self, resolution=(64, 64, 64), bounds=((-1, -1, -1), (1, 1, 1)), device="cuda"):
+class SDFGrid(nn.Module):
+    def __init__(self, resolution, min_bound, max_bound, device):
         super().__init__()
-        self.sdf_grid = SDFGrid(resolution, bounds[0], bounds[1], device).to(device)
         self.sampler = GradientBasedSampler(num_samples=160, num_importance=32)
+        self.resolution = resolution
+        self.min_bound = torch.tensor(min_bound).to(device)
+        self.max_bound = torch.tensor(max_bound).to(device)
+        self.grid = nn.Parameter(torch.ones(1, 27 + 1, *resolution) / 100)
         self.alpha = nn.Parameter(torch.tensor(1.0))
         self.beta = nn.Parameter(torch.tensor(0.0))
-        self.test_pts = np.array([])
+    
+    def get_sdf(self, points):
+        sdf = torch.zeros((points.shape[0]), device=points.device)
+        mask = self.test_points(points)
+
+        points = points[mask]
+
+        # Normalize points to [-1, 1] range
+        normalized_points = (points - self.min_bound) / (self.max_bound - self.min_bound) * 2 - 1
+        
+        # Reshape for grid_sample
+        normalized_points = normalized_points.view(1, -1, 1, 1, 3)
+        
+        # Trilinear interpolation
+        sdf_values = F.grid_sample(self.grid[:, 0:1, ...], normalized_points, 
+                                   align_corners=True, mode='bilinear')
+        sdf[mask] = sdf_values.view(points.shape[:-1])
+
+        return sdf
+
+    def get_sdf_sh(self, points):
+        sh = torch.zeros((points.shape[0], 27), device=points.device)
+        sdf = torch.zeros((points.shape[0]), device=points.device)
+        mask = self.test_points(points)
+
+        old_point = points
+        points = points[mask]
+
+        # Normalize points to [-1, 1] range
+        normalized_points = (points - self.min_bound) / (self.max_bound - self.min_bound) * 2 - 1
+        
+        # Reshape for grid_sample
+        normalized_points = normalized_points.view(1, -1, 1, 1, 3)
+        
+        # Trilinear interpolation
+        sdf_values = F.grid_sample(self.grid[:, 0:1, ...], normalized_points, 
+                                   align_corners=True, mode='bilinear')
+
+        sh_values = F.grid_sample(self.grid[:, 1:, ...], normalized_points, 
+                            align_corners=True, mode='bilinear')
+
+        sdf[mask] = sdf_values.view(points.shape[:-1])
+        sh[mask] = sh_values.view(points.shape[0], 27)
+
+        print(torch.sum(self.grid[:, :1, ...] != 0.01))
+        print(torch.sum(torch.isnan(points)), torch.sum(torch.isnan(old_point)))
+        print(torch.sum(torch.isnan(sdf)), torch.sum(torch.isnan(normalized_points)), torch.sum(torch.isnan(self.grid[:, :1, ...])), torch.sum(torch.isnan(self.grid[:, 1:, ...])))
+        
+        return sdf, sh
+
+    def get_sdf_gradient(self, points):
+        points.requires_grad_(True)
+        sdf = self.get_sdf(points)
+        grad = torch.autograd.grad(sdf.sum(), points, create_graph=True)[0]
+        return grad
 
     def eval_spherical_function(self, k, d):
         x, y, z = d[..., 0:1], d[..., 1:2], d[..., 2:3]
@@ -308,15 +328,17 @@ class SDFToNeRF(nn.Module):
 
     def test_camera(self, rays_o, rays_d):
         try:
-            sdf_values, sh_values, pts, z_vals, valid = self.sampler(self.sdf_grid, rays_o, rays_d)
+            sdf_values, sh_values, pts, z_vals, valid = self.sampler(self, rays_o, rays_d)
             return True
         except:
             return False
     
+    def test_points(self, x):
+        return (x[:, 0] >= self.min_bound[0]) & (x[:, 1] >= self.min_bound[1]) & (x[:, 2] >= self.min_bound[2]) & \
+        (x[:, 0] <= self.max_bound[0]) & (x[:, 1] <= self.max_bound[1]) & (x[:, 2] <= self.max_bound[2])
+    
     def forward(self, rays_o, rays_d):
-        sdf_values, sh_values, pts, z_vals, valid = self.sampler(self.sdf_grid, rays_o, rays_d)
-
-        self.test_pts = np.concatenate((self.test_pts, pts.reshape(-1, 3).detach().cpu().numpy()), axis=0)
+        sdf_values, sh_values, pts, z_vals, valid = self.sampler(self, rays_o, rays_d)
         
         rays_o = rays_o[valid]
         rays_d = rays_d[valid]
@@ -330,7 +352,7 @@ class SDFToNeRF(nn.Module):
         weights = self.compute_accumulated_transmittance(1 - alpha).unsqueeze(2) * alpha.unsqueeze(2)
         c = (weights * colors).sum(dim=1)  # Pixel values
         weight_sum = weights.sum(-1).sum(-1)  # Regularization for white background\
-        return c + 1 - weight_sum.unsqueeze(-1), valid
+        return c + 1 - weight_sum.unsqueeze(-1), pts, valid
 
 
 if __name__ == "__main__":
@@ -338,68 +360,71 @@ if __name__ == "__main__":
     nb_epochs = int(1e0)
     batch_size = 1024
 
-    scene_helper = SceneHelper('ystad_kloster', "output/points_3d.npy", "output/cameras_extrinsic.npy")
+    scene_helper = SceneHelper('ystad_kloster', "output/points_3d.npy", "output/cameras_extrinsic.npy", 250)
 
-    sdf_model = SDFToNeRF(scene_helper.resolution, (scene_helper.min_bound, scene_helper.max_bound), device)
-    sdf_model.to(device)
+    sdf_model = SDFGrid(scene_helper.resolution, scene_helper.min_bound, scene_helper.max_bound, device).to(device)
     optimizer = torch.optim.Adam(sdf_model.parameters(), lr=1e-2)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[2, 4, 8], gamma=0.5)
 
-    # training_dataset = torch.from_numpy(np.load('/home/coder/psrnet/nerf_datasets/training_data.pkl', allow_pickle=True))
-    # data_loader = DataLoader(training_dataset, batch_size=2048, shuffle=True)
-    # for _ in range(nb_epochs):
-    #     training_loss = []
-    #     for batch in tqdm(data_loader):
-    #         ray_origins = batch[:, :3].to(device)
-    #         ray_directions = batch[:, 3:6].to(device)
-    #         ground_truth_px_values = batch[:, 6:].to(device)
-
-    #         regenerated_px_values, valid = sdf_model(ray_origins, ray_directions)
-    #         loss = torch.nn.functional.mse_loss(ground_truth_px_values[valid], regenerated_px_values)
-
-    #         optimizer.zero_grad()
-    #         loss.backward()
-    #         optimizer.step()
-    #         training_loss.append(loss.item())
-    #         if(len(training_loss) % 170 == 0):
-    #             if len(total_loss) > 0:
-    #                 print([0 if l1 - l2 > 0 else 1 for l1, l2 in zip(training_loss,total_loss[-1])])
-    #             total_loss.append(training_loss)
-    #             training_loss = []
-    #     scheduler.step()
-    #     print(training_loss)
-
-    available_img = []
-    for i in tqdm(range(scene_helper.num_img)):
-        torch.cuda.empty_cache()
-        rays_o, rays_d, gt_px_values = scene_helper.sample_batch(batch_size, img_index=i, sample_all=False)
-        is_valid = sdf_model.test_camera(rays_o, rays_d)
-        if is_valid:
-            available_img.append(i)
-    
-    print(available_img)
-
+    training_dataset = torch.from_numpy(np.load('/home/coder/psrnet/nerf_datasets/training_data.pkl', allow_pickle=True))
+    data_loader = DataLoader(training_dataset, batch_size=2048, shuffle=True)
     total_loss = []
-    for epoch in tqdm(range(nb_epochs)):
+    for _ in range(nb_epochs):
         training_loss = []
-        for index, i in tqdm(enumerate(available_img)):
-            torch.cuda.empty_cache()
+        for batch in tqdm(data_loader):
+            ray_origins = batch[:, :3].to(device)
+            ray_directions = batch[:, 3:6].to(device)
+            ground_truth_px_values = batch[:, 6:].to(device)
 
-            rays_o, rays_d, gt_px_values = scene_helper.sample_batch(batch_size, img_index=i, sample_all=False)
-            pred_px_values, valid = sdf_model(rays_o, rays_d)
+            regenerated_px_values, pts, valid = sdf_model(ray_origins, ray_directions)
+            loss = torch.nn.functional.mse_loss(ground_truth_px_values[valid], regenerated_px_values)
 
-            loss = torch.nn.functional.mse_loss(gt_px_values[valid].float()/255, pred_px_values.float())
+            print("losss", loss.item())
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             training_loss.append(loss.item())
-            
-            if index == 5:
-                np.save('output/test_points.npy', sdf_model.test_pts)
-                break
-        if epoch > 0:
-            print([0 if l1 - l2 > 0 else 1 for l1, l2 in zip(training_loss,total_loss[-1])])
-        total_loss.append(training_loss)
+            if(len(training_loss) % 170 == 0):
+                if len(total_loss) > 0:
+                    print(training_loss)
+                total_loss.append(training_loss)
+                training_loss = []
         scheduler.step()
+
+    # available_img = []
+    # for i in tqdm(range(scene_helper.num_img)):
+    #     torch.cuda.empty_cache()
+    #     rays_o, rays_d, gt_px_values = scene_helper.sample_batch(batch_size, img_index=i, sample_all=False)
+    #     is_valid = sdf_model.test_camera(rays_o, rays_d)
+    #     if is_valid:
+    #         available_img.append(i)
+    
+    # print(available_img)
+    # test_pts = np.array([[0, 0, 0]])
+
+    # total_loss = []
+    # for epoch in tqdm(range(nb_epochs)):
+    #     training_loss = []
+    #     for index, i in tqdm(enumerate(available_img)):
+    #         torch.cuda.empty_cache()
+
+    #         rays_o, rays_d, gt_px_values = scene_helper.sample_batch(batch_size, img_index=i, sample_all=False)
+    #         pred_px_values, pts, valid = sdf_model(rays_o, rays_d)
+
+    #         loss = torch.nn.functional.mse_loss(gt_px_values[valid].float()/255, pred_px_values.float())
+
+    #         optimizer.zero_grad()
+    #         loss.backward()
+    #         optimizer.step()
+    #         training_loss.append(loss.item())
+
+    #         if index > 20 and index <= 25:
+    #             print("SHAPE", pts.shape)
+    #             test_pts = np.concatenate((test_pts, pts.reshape(-1, 3).detach().cpu().numpy()), axis=0)
+    #             np.save('output/test_points.npy', np.concatenate((scene_helper.rectangular, test_pts)))
+    #     if epoch > 0:
+    #         print([0 if l1 - l2 > 0 else 1 for l1, l2 in zip(training_loss,total_loss[-1])])
+    #     total_loss.append(training_loss)
+    #     scheduler.step()
 
