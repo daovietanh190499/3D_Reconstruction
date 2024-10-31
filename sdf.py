@@ -10,6 +10,42 @@ from matplotlib.image import imread
 
 from tqdm import tqdm
 
+
+class AppearanceModel(nn.Module):
+    def __init__(self, embedding_dim_pos=20, hidden_dim=128):
+        super(AppearanceModel, self).__init__()
+
+        self.block1 = nn.Sequential(nn.Linear(embedding_dim_pos * 3, hidden_dim), nn.ReLU(),
+                                    nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+                                    nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+                                    nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), )
+
+        self.block3 = nn.Sequential(nn.Linear(hidden_dim, hidden_dim // 2), nn.ReLU(), )
+        self.block4 = nn.Sequential(nn.Linear(hidden_dim // 2, 75), )
+
+        self.embedding_dim_pos = embedding_dim_pos
+        self.relu = nn.ReLU()
+
+        self.bandwidth = nn.Parameter(torch.zeros((1, 25)))
+        self.p = nn.Parameter(torch.randn((25, 2)))
+
+    @staticmethod
+    def positional_encoding(x, L):
+        out = torch.empty(x.shape[0], x.shape[1] * 2 * L, device=x.device)
+        for i in range(x.shape[1]):
+            for j in range(L):
+                out[:, i * (2 * L) + 2 * j] = torch.sin(2 ** j * x[:, i])
+                out[:, i * (2 * L) + 2 * j + 1] = torch.cos(2 ** j * x[:, i])
+        return out
+
+    def forward(self, o):
+        emb_x = self.positional_encoding(o, self.embedding_dim_pos // 2)
+        h = self.block1(emb_x)
+        h = self.block3(h)
+        k = self.block4(h).reshape(o.shape[0], 75)
+        return k
+
+
 class SceneHelper:
     def __init__(self, data_path, point_cloud_path, camera_extrinsics_path, max_resolution):
         point_cloud = np.load(point_cloud_path)
@@ -23,7 +59,7 @@ class SceneHelper:
         self.camera_extrinsics = camera_extrinsics
         self.camera_intrinsics = camera_intrinsics
         self.images, self.num_img = self.load_images()
-        self.min_bound, self.max_bound, self.resolution = (-2, -2, -2), (2, 2, 2), (max_resolution, max_resolution, max_resolution)
+        self.min_bound, self.max_bound, self.resolution = (-1.5, -1.5, -1.5), (1.5, 1.5, 1.5), (max_resolution, max_resolution, max_resolution)
         self.min_bound, self.max_bound, self.resolution = self.get_grid_resolution(max_resolution)
         self.bounds = (self.min_bound, self.max_bound)
 
@@ -32,17 +68,6 @@ class SceneHelper:
         z = np.linspace(0, 1, 10)*((self.max_bound[2] - self.min_bound[2])) + self.min_bound[2]
         grid = np.meshgrid(x, y, z, indexing='ij')
         self.rectangular = np.stack(grid, axis=-1).reshape(-1, 3)
-
-        # self.rectangular = np.array([
-        #     self.bounds[0],
-        #     self.bounds[1],
-        #     [self.bounds[0][0], self.bounds[0][1], self.bounds[1][2]],
-        #     [self.bounds[0][0], self.bounds[1][1], self.bounds[1][2]],
-        #     [self.bounds[1][0], self.bounds[0][1], self.bounds[1][2]],
-        #     [self.bounds[0][0], self.bounds[1][1], self.bounds[0][2]],
-        #     [self.bounds[1][0], self.bounds[1][1], self.bounds[0][2]],
-        #     [self.bounds[1][0], self.bounds[0][1], self.bounds[0][2]]
-        # ])
     
     def filter_point_cloud(self, verts):
         verts = verts * 200
@@ -239,6 +264,7 @@ class GradientBasedSampler:
         sdf_values, sh_values = sdf_grid.get_sdf_sh(pts.reshape(-1, 3)) #.reshape(pts.shape[:-1])
         sdf_values = sdf_values.reshape(pts.shape[:-1])
         sh_values = sh_values.reshape(*pts.shape[:-1], 27)
+        # sh_values = sh_values.reshape(*pts.shape[:-1], 75)
 
         return sdf_values, sh_values, pts, z_vals, valid
 
@@ -250,8 +276,10 @@ class SDFGrid(nn.Module):
         self.min_bound = torch.tensor(min_bound).to(device)
         self.max_bound = torch.tensor(max_bound).to(device)
         self.grid = nn.Parameter(torch.ones(1, 27 + 1, *resolution) / 100)
+        # self.grid = nn.Parameter(torch.ones(1, 1, *resolution) / 100)
         self.alpha = nn.Parameter(torch.tensor(1.0))
         self.beta = nn.Parameter(torch.tensor(0.0))
+        # self.appearance_model = AppearanceModel()
     
     def get_sdf(self, points):
         sdf = torch.zeros((points.shape[0]), device=points.device)
@@ -263,17 +291,21 @@ class SDFGrid(nn.Module):
         normalized_points = (points - self.min_bound) / (self.max_bound - self.min_bound) * 2 - 1
         
         # Reshape for grid_sample
-        normalized_points = normalized_points.view(1, -1, 1, 1, 3)
+        normalized_points = normalized_points.view(1, 1, 1, -1, 3)
         
         # Trilinear interpolation
         sdf_values = F.grid_sample(self.grid[:, 0:1, ...], normalized_points, 
                                    align_corners=True, mode='bilinear')
-        sdf[mask] = sdf_values.view(points.shape[:-1])
+
+        sdf_values = sdf_values.permute([0, 2, 3, 4, 1]).squeeze(0).squeeze(0).squeeze(0)
+
+        sdf[mask] = sdf_values.squeeze(1)
 
         return sdf
 
     def get_sdf_sh(self, points):
         sh = torch.zeros((points.shape[0], 27), device=points.device)
+        # sh = torch.zeros((points.shape[0], 75), device=points.device)
         sdf = torch.zeros((points.shape[0]), device=points.device)
         mask = self.test_points(points)
 
@@ -284,7 +316,7 @@ class SDFGrid(nn.Module):
         normalized_points = (points - self.min_bound) / (self.max_bound - self.min_bound) * 2 - 1
         
         # Reshape for grid_sample
-        normalized_points = normalized_points.view(1, -1, 1, 1, 3)
+        normalized_points = normalized_points.view(1, 1, 1, -1, 3)
         
         # Trilinear interpolation
         sdf_values = F.grid_sample(self.grid[:, 0:1, ...], normalized_points, 
@@ -293,12 +325,19 @@ class SDFGrid(nn.Module):
         sh_values = F.grid_sample(self.grid[:, 1:, ...], normalized_points, 
                             align_corners=True, mode='bilinear')
 
-        sdf[mask] = sdf_values.view(points.shape[:-1])
-        sh[mask] = sh_values.view(points.shape[0], 27)
+        sdf_values = sdf_values.permute([0, 2, 3, 4, 1]).squeeze(0).squeeze(0).squeeze(0)
+        sh_values = sh_values.permute([0, 2, 3, 4, 1]).squeeze(0).squeeze(0).squeeze(0)
 
-        print(torch.sum(self.grid[:, :1, ...] != 0.01))
-        print(torch.sum(torch.isnan(points)), torch.sum(torch.isnan(old_point)))
-        print(torch.sum(torch.isnan(sdf)), torch.sum(torch.isnan(normalized_points)), torch.sum(torch.isnan(self.grid[:, :1, ...])), torch.sum(torch.isnan(self.grid[:, 1:, ...])))
+        # sh_values = self.appearance_model(points)
+
+        sdf[mask] = sdf_values.squeeze(1)
+        sh[mask] = sh_values
+        # sh[mask] = sh_values
+
+        # print(torch.sum(self.grid[:, :1, ...] != 0.01))
+        # print(torch.sum(torch.isnan(points)), torch.sum(torch.isnan(old_point)))
+        # print(torch.sum(torch.isnan(sdf)), torch.sum(torch.isnan(normalized_points)), torch.sum(torch.isnan(self.grid[:, :1, ...])), torch.sum(torch.isnan(self.grid[:, 1:, ...])), torch.isnan(self.grid[:, :1, ...]).nonzero())
+        # print(self.alpha, self.beta)
         
         return sdf, sh
 
@@ -308,7 +347,19 @@ class SDFGrid(nn.Module):
         grad = torch.autograd.grad(sdf.sum(), points, create_graph=True)[0]
         return grad
 
+    def to_cartesian(self, theta_phi):
+        return torch.stack([torch.sin(theta_phi[:, 0]) * torch.cos(theta_phi[:, 1]),
+                            torch.sin(theta_phi[:, 0]) * torch.sin(theta_phi[:, 1]),
+                            torch.cos(theta_phi[:, 0])], axis=1)
+
+    def eval_spherical_gaussian_function(self, k, d):
+        k = k.reshape(-1, 25, 3)
+        c = (k * torch.exp(
+            (self.appearance_model.bandwidth.unsqueeze(-1) * self.to_cartesian(self.appearance_model.p).unsqueeze(0) * d.unsqueeze(1)))).sum(1)
+        return torch.sigmoid(c)
+
     def eval_spherical_function(self, k, d):
+        k = k.reshape(-1, 3, 9)
         x, y, z = d[..., 0:1], d[..., 1:2], d[..., 2:3]
 
         # Modified from https://github.com/google/spherical-harmonics/blob/master/sh/spherical_harmonics.cc
@@ -323,8 +374,8 @@ class SDFGrid(nn.Module):
                         accumulated_transmittance[:, :-1]), dim=-1)
     
     def sdf_to_density(self, sdf):
-        # return torch.nn.functional.relu(sdf_values)
-        return 1 / (1 + torch.exp(-self.alpha * (sdf + self.beta)))
+        return torch.nn.functional.relu(sdf)
+        # return 1 / (1 + torch.exp(-self.alpha * (sdf + self.beta)))
 
     def test_camera(self, rays_o, rays_d):
         try:
@@ -344,8 +395,8 @@ class SDFGrid(nn.Module):
         rays_d = rays_d[valid]
 
         rays_d = rays_d.expand(z_vals.shape[1], rays_d.shape[0], 3).transpose(0, 1)
-        colors = self.eval_spherical_function(sh_values.reshape(-1, 3, 9), rays_d.reshape(-1, 3)).reshape(rays_d.shape)
-        sigma = self.sdf_to_density(sdf_values.reshape(-1)).reshape(sdf_values.shape)
+        colors = self.eval_spherical_function(sh_values, rays_d.reshape(-1, 3)).reshape(rays_d.shape)
+        sigma = self.sdf_to_density(sdf_values.reshape(-1)).reshape(rays_d.shape[:-1])
         delta = torch.cat((z_vals[:, 1:] - z_vals[:, :-1], torch.tensor([1e10], device=colors.device).expand(rays_o.shape[0], 1)), -1)
 
         alpha = 1 - torch.exp(-sigma * delta)  # [batch_size, nb_bins]
@@ -378,8 +429,9 @@ if __name__ == "__main__":
 
             regenerated_px_values, pts, valid = sdf_model(ray_origins, ray_directions)
             loss = torch.nn.functional.mse_loss(ground_truth_px_values[valid], regenerated_px_values)
-
-            print("losss", loss.item())
+            
+            # print("=====", regenerated_px_values[-4:], (ground_truth_px_values[valid])[-4:])
+            # print("losss", loss.item())
 
             optimizer.zero_grad()
             loss.backward()

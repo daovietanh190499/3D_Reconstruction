@@ -24,7 +24,7 @@ class NerfModel(nn.Module):
         """
         super(NerfModel, self).__init__()
 
-        self.voxel_grid = nn.Parameter(torch.ones((N, N, N, 27 + 1)) / 100)
+        self.voxel_grid = nn.Parameter(torch.ones((1, 27+ 1, N, N, N)) / 100)
         self.scale = scale
         self.N = N
 
@@ -33,15 +33,18 @@ class NerfModel(nn.Module):
         sigma = torch.zeros((x.shape[0]), device=x.device)
         mask = (x[:, 0].abs() < self.scale) & (x[:, 1].abs() < self.scale) & (x[:, 2].abs() < self.scale)
 
-        idx = (x[mask] / (2 * self.scale / self.N) + self.N / 2).long().clip(0, self.N - 1)
-        tmp = self.voxel_grid[idx[:, 0], idx[:, 1], idx[:, 2]]
+        # idx = (x[mask] / (2 * self.scale / self.N) + self.N / 2).long().clip(0, self.N - 1)
+        idx = (x[mask]/self.scale).clip(-1, 1)
+        # tmp = self.voxel_grid[idx[:, 0], idx[:, 1], idx[:, 2]]
+        tmp = nn.functional.grid_sample(self.voxel_grid, idx.view(1, 1, 1, -1, 3), mode='bilinear', align_corners=True)
+        tmp = tmp.permute([0, 2, 3, 4, 1]).squeeze(0).squeeze(0).squeeze(0)
         sigma[mask], k = torch.nn.functional.relu(tmp[:, 0]), tmp[:, 1:]
         color[mask] = eval_spherical_function(k.reshape(-1, 3, 9), d[mask])
         return color, sigma
 
 
 @torch.no_grad()
-def test(hn, hf, dataset, chunk_size=10, img_index=0, nb_bins=192, H=400, W=400):
+def test(model, hn, hf, dataset, chunk_size=10, img_index=0, nb_bins=192, H=400, W=400):
     ray_origins = dataset[img_index * H * W: (img_index + 1) * H * W, :3]
     ray_directions = dataset[img_index * H * W: (img_index + 1) * H * W, 3:6]
 
@@ -109,7 +112,7 @@ def train(nerf_model, optimizer, scheduler, data_loader, device='cpu', hn=0, hf=
             training_loss.append(loss.item())
             if(len(training_loss) % 170 == 0):
                 if len(total_loss) > 0:
-                    print([0 if l1 - l2 > 0 else 1 for l1, l2 in zip(training_loss,total_loss[-1])])
+                    print(training_loss)
                 total_loss.append(training_loss)
                 training_loss = []
 
@@ -127,6 +130,8 @@ if __name__ == "__main__":
     scheduler = torch.optim.lr_scheduler.MultiStepLR(model_optimizer, milestones=[2, 4, 8], gamma=0.5)
 
     data_loader = DataLoader(training_dataset, batch_size=2048, shuffle=True)
-    train(model, model_optimizer, scheduler, data_loader, nb_epochs=16, device=device, hn=2, hf=6, nb_bins=192)
+    train(model, model_optimizer, scheduler, data_loader, nb_epochs=1, device=device, hn=2, hf=6, nb_bins=192)
     for img_index in [0, 60, 120, 180]:
-        test(2, 6, testing_dataset, img_index=img_index, nb_bins=192, H=400, W=400)
+        test(model, 2, 6, testing_dataset, img_index=img_index, nb_bins=192, H=400, W=400)
+
+# https://arxiv.org/pdf/2303.14158
